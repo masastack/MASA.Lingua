@@ -10,7 +10,7 @@
 
 ## 1. 安装
 
-从内部 npm 源安装：
+从 npm 安装（开源发布后 `@lingua/vue` 随仓库公开到 npm registry）：
 
 ```bash
 npm i @lingua/vue vue-i18n
@@ -24,14 +24,8 @@ npm i @lingua/vue vue-i18n
 }
 ```
 
-内部源地址按公司配置，写进项目根的 `.npmrc`：
-
-```ini
-registry=https://<内部 npm 源地址>/
-```
-
-如果这个包还没推到内部源，让维护方先发布（`packages/lingua-vue` 的 `package.json` 当前版本 `1.1.0`）；
-在此之前**不要**用 `file:` 路径依赖接进业务仓库——那会让构建依赖开发机的目录结构，CI 上必然失败。
+如果 npm 上还没有需要的版本（`packages/lingua-vue` 的 `package.json` 当前版本 `1.1.0`），
+让维护方先发布；在此之前**不要**用 `file:` 路径依赖接进业务仓库——那会让构建依赖开发机的目录结构，CI 上必然失败。
 
 ## 2. 初始化
 

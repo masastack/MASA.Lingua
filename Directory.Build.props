@@ -24,9 +24,9 @@
     <Authors>MASA</Authors>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
-    <RepositoryUrl>https://gitlab-hz.lonsid.cn/cicd/masa.lingua</RepositoryUrl>
+    <RepositoryUrl>https://github.com/masastack/MASA.Lingua</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
-    <PackageReleaseNotes>https://gitlab-hz.lonsid.cn/cicd/masa.lingua/-/releases</PackageReleaseNotes>
+    <PackageReleaseNotes>https://github.com/masastack/MASA.Lingua/releases</PackageReleaseNotes>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <!-- Release 配置下随构建直接产出 nupkg/snupkg，Debug 构建不打包 -->

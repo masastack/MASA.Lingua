@@ -1,3 +1,7 @@
+# 站点部署流水线：GitHub 仓库经 .github/workflows/mirror-gitlab.yml 镜像到本 GitLab 后在此触发，
+# 模板沿用 MASA Stack 的 argocd 部署模板。
+# NuGet 包发布不在此处：由 GitHub Actions 在 Release published 时发布到 nuget.org
+# （见 GitHub 仓库 .github/workflows/package_push_nuget.org.yml）。
 include:
   - project: "cicd/back-cicd"
     ref: "main"
@@ -31,22 +35,4 @@ push-prd:lingua-service:
   extends:
     - .push-prd
     - .pub-lingua-service
-
-
-build:nuget:
-  variables:
-    NUGET_API_KEY: "lonsid"
-  stage: build
-  tags:
-    - k3s
-  retry: 2
-  image: mcr.microsoft.com/dotnet/sdk:10.0
-  before_script:
-    - echo $CI_COMMIT_TAG
-  script:
-    - bash ./build/pack.sh $CI_COMMIT_TAG push
-  after_script:
-    - ls ./artifacts
-  rules:
-    - if: '$CI_COMMIT_TAG =~ /^[0-9]+\.[0-9]+\.[0-9]+$/'
 

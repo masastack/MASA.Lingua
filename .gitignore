@@ -232,6 +232,10 @@ Thunbs.db
 # DataProtection 密钥环（SSO Cookie 加密用），绝不能进仓库
 .keys/
 
+# Agent 会话与本地工作目录（不属项目源码）
+session-state/
+.taste-skill/
+
 # 单实例锁文件（运行时生成）
 # 发布产物：{project}/{culture}.json 由发布器在运行时生成（只用于重启恢复，不对公网暴露），不进版本控制
 src/MASA.Lingua.Server/App_Data/

@@ -11,7 +11,7 @@
 
 ## 1. 引用
 
-从内部 NuGet 源安装。版本号以源上的实际发布号为准（当前 `1.3.0`）：
+从 nuget.org 安装。版本号以 nuget.org 上的实际发布号为准（当前 `1.3.0`）：
 
 ```xml
 <ItemGroup>
@@ -33,15 +33,12 @@
 </ItemGroup>
 ```
 
-内部源的地址按公司配置（`http://devops.lonsid.cn:8080/nuget` 是打包脚本推送的目标），写进
-`NuGet.config` 或用 `dotnet nuget add source` 添加一次即可：
+nuget.org 上已公开发布，默认源即可安装。升级时只改版本号，
+不要混用不同版本（`MasaI18n` / `MasaBlazor` / `Maui` 三个包依赖其余包的具体版本）：
 
 ```bash
-dotnet nuget add source http://devops.lonsid.cn:8080/nuget --name lonsid
 dotnet restore
 ```
-
-升级时只改版本号，不要混用不同版本（`MasaI18n` / `MasaBlazor` / `Maui` 三个包依赖其余包的具体版本）。
 
 ## 2. 注册
 
@@ -362,7 +359,7 @@ builder.Services.AddLinguaForMasaBlazor(o => ...);
 
 ## 验证过什么
 
-新建 ASP.NET Core 8 Minimal API 工程，从内部 NuGet 源安装 `MASA.Lingua.SDK.AspNetCore`，按上面第 2 节写法对着本地 Lingua 服务运行：
+新建 ASP.NET Core 8 Minimal API 工程，从 nuget.org 安装 `MASA.Lingua.SDK.AspNetCore`，按上面第 2 节写法对着本地 Lingua 服务运行：
 
 - 启动后自动在工作目录生成 `i18n/zh-CN.json`、`en-US.json`、`ja-JP.json`（三个语种来自平台，客户端没有配置任何语种）；
 - `Accept-Language: en-US / ja-JP / zh-CN` 分别返回对应语种，`L["common:welcomeUser", new { userName = "Alice" }]` 得到

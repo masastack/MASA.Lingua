@@ -18,9 +18,9 @@
 > 但仓内**没有自动化测试**（`tests/` 里没有引用该包），改动后请按文末「验证过什么」自行冒烟。
 > 各文档末尾的「验证过什么」写明了验证了什么、没验证什么。
 
-> **SDK 从内部 NuGet 源安装**：版本号只在 `Directory.Build.props` 维护一处（当前 `1.3.0`），
-> `git tag x.y.z` 触发的 `build:nuget` 作业经 `build/pack.sh` 打包并推送到内部 NuGet 源
-> （`http://devops.lonsid.cn:8080/nuget`）。消费方一律用 `PackageReference`。
+> **SDK 安装（nuget.org）**：版本号只在 `Directory.Build.props` 维护一处（当前 `1.3.0`）。
+> 在 GitHub 上打 `x.y.z` tag 并发布 Release 后，`package_push_nuget.org.yml` 工作流经 `build/pack.sh`
+> 打包并推送到 [nuget.org](https://www.nuget.org/profiles/MASA)。消费方一律用 `PackageReference`。
 > 需要在自己工程里验证未发版的改动时，见 [aspnetcore.md 的「临时验证未发版的改动」](aspnetcore.md#临时验证未发版的改动例外情况)。
 
 ## 内置示例项目

@@ -60,13 +60,13 @@ public sealed class AiTranslationServiceTests
     public async Task Request_Failure_Should_Throw_With_Model_Endpoint_And_Reason_And_Not_Retry_Or_Fall_Back()
     {
         var client = new ScriptedChatClient(new HttpRequestException("model 'gemma4:31b-mlx' not found"));
-        var service = Create(client, model: "gemma4:31b-mlx", endpoint: "http://192.168.10.174:12434/v1");
+        var service = Create(client, model: "gemma4:31b-mlx", endpoint: "http://10.0.0.5:11434/v1");
 
         var ex = await Assert.ThrowsAsync<AiTranslationException>(() =>
             service.TranslateBatchAsync("p", "zh-CN", ["en-US", "ja-JP"], [Item("save", "保存")], []));
 
         // 一眼能看出是哪套配置、什么原因
-        Assert.Contains("gemma4:31b-mlx @ 192.168.10.174:12434", ex.Message);
+        Assert.Contains("gemma4:31b-mlx @ 10.0.0.5:11434", ex.Message);
         Assert.Contains("not found", ex.Message);
         Assert.Empty(ex.PartialResults);
 
@@ -95,12 +95,12 @@ public sealed class AiTranslationServiceTests
             .Select(_ => new HttpRequestException("由于目标计算机积极拒绝，无法连接。"))
             .ToArray();
         var client = new ScriptedChatClient(new AggregateException("Retry failed after 4 tries.", attempts));
-        var service = Create(client, model: "qwen3.8:27b-mlx", endpoint: "http://192.168.10.174:12434/v1");
+        var service = Create(client, model: "qwen3.8:27b-mlx", endpoint: "http://10.0.0.5:11434/v1");
 
         var ex = await Assert.ThrowsAsync<AiTranslationException>(() =>
             service.TranslateBatchAsync("p", "zh-CN", ["en-US"], [Item("save", "保存")], []));
 
-        Assert.Contains("qwen3.8:27b-mlx @ 192.168.10.174:12434", ex.Message);
+        Assert.Contains("qwen3.8:27b-mlx @ 10.0.0.5:11434", ex.Message);
         Assert.Contains("连续尝试 4 次均失败", ex.Message);
         Assert.Equal(2, ex.Message.Split("积极拒绝").Length); // 原因只出现一次
         Assert.Empty(ex.PartialResults);
@@ -390,7 +390,7 @@ public sealed class AiTranslationServiceTests
     {
         using var provider = BuildAiServices(new()
         {
-            ["Lingua:AI:Endpoint"] = "http://192.168.10.174:12434/v1",
+            ["Lingua:AI:Endpoint"] = "http://10.0.0.5:11434/v1",
             ["Lingua:AI:ModelId"] = "qwen3.8:27b-mlx"
         });
 

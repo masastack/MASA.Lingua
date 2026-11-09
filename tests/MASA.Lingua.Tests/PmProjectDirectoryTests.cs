@@ -58,17 +58,17 @@ public sealed class PmProjectDirectoryTests
     [Fact]
     public async Task Same_App_Identity_Under_Two_Projects_Should_Stay_In_Both()
     {
-        // PM 里 Lonsid_MESPro_Web_Host 同时挂在 lonsid-smart 与 Lonsid_CRM 下：不能去重，否则其中一个项目下选不到它
+        // PM 里 Factory_Web_Host 同时挂在 mes-factory 与 Mes_CRM 下：不能去重，否则其中一个项目下选不到它
         var pm = new FakePm(() =>
         [
-            Project("lonsid-smart", ("Lonsid_MESPro_Web_Host", "Lonsid_MESPro_Web_Host")),
-            Project("Lonsid_CRM", ("Lonsid_MESPro_Web_Host", "mes"))
+            Project("mes-factory", ("Factory_Web_Host", "Factory_Web_Host")),
+            Project("Mes_CRM", ("Factory_Web_Host", "mes"))
         ]);
         var directory = CreateDirectory(pm);
 
         var projects = await directory.GetProjectsAsync();
 
-        Assert.All(projects, p => Assert.Contains(p.Apps, a => a.Identity == "Lonsid_MESPro_Web_Host"));
+        Assert.All(projects, p => Assert.Contains(p.Apps, a => a.Identity == "Factory_Web_Host"));
         Assert.Equal(2, projects.Count);
     }
 
