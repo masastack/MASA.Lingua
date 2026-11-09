@@ -1,0 +1,23 @@
+name: Mirror to GitLab
+# Site deployment stays on the internal GitLab: this workflow mirrors the GitHub
+# repository there after every push, and the GitLab CI (.gitlab-ci.yml) builds
+# and deploys the lingua-service image.
+on:
+  push:
+  delete:
+  create:
+  workflow_dispatch:
+
+jobs:
+  to_gitlab:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: yesolutions/mirror-action@master
+        with:
+          REMOTE: '${{ secrets.GITLAB_ADDER }}/cicd/masa.lingua.git'
+          GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+          GIT_PASSWORD: ${{ secrets.GIT_PASSWORD }}
+          PUSH_ALL_REFS: "false"

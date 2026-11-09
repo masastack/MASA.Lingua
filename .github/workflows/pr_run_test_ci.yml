@@ -1,0 +1,52 @@
+name: PR_Run_Test_CI
+on:
+  pull_request:
+    branches:
+      - "main"
+  push:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+jobs:
+  dotnet-test:
+    name: dotnet build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET (pinned by global.json)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+
+      - name: Build (Release)
+        run: dotnet build -c Release
+
+      # Integration tests spin up a real PostgreSQL via Testcontainers (docker is available on ubuntu runners).
+      - name: Test
+        run: dotnet test -c Release --no-build --verbosity normal
+
+      # Advisory for now: unblocks the first runs while the formatting debt is settled.
+      - name: Format check (advisory)
+        continue-on-error: true
+        run: dotnet format --verify-no-changes --verbosity diagnostic
+
+  node-test:
+    name: lingua-vue tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/lingua-vue
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Test
+        run: npm install --no-fund --no-audit && npm test
