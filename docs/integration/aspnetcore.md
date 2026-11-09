@@ -1,5 +1,7 @@
 # 接入 ASP.NET Core
 
+> English summary: integrating Lingua into ASP.NET Core (Minimal API / MVC / Razor Pages / Blazor Server) via `MASA.Lingua.SDK.AspNetCore` — a thin `IStringLocalizer` adapter with SSE + polling hot reload. Chinese guide below; a 5-minute end-to-end walkthrough lives in [docs/quickstart.md](../quickstart.md).
+
 适用：.NET 8 / .NET 10 的 ASP.NET Core（Minimal API / MVC / Razor Pages / Blazor Server）。
 
 业务代码保持标准的 `IStringLocalizer` 写法，Lingua 在后台同步 `{culture}.json` 到内存和本地磁盘。

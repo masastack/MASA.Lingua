@@ -1,5 +1,7 @@
 # 接入 .NET MAUI
 
+> English summary: integrating Lingua into .NET MAUI (XAML), Blazor Hybrid, WPF and WinForms clients via `MASA.Lingua.SDK.Maui` — a hot-reloading localizer that syncs at startup and on resume. Chinese guide below.
+
 适用：.NET 8 / .NET 10 的 MAUI（XAML 页面），以及 Blazor Hybrid、WPF、WinForms 等任何 .NET 8 / .NET 10 客户端应用。
 包名 `MASA.Lingua.SDK.Maui`：**不依赖 MAUI 工作负载**，是普通的 `net8.0;net10.0` 双目标类库，MAUI 的 `net8.0-android` / `net10.0-android` / `ios` / `maccatalyst` / `windows` 目标都可以引用。
 

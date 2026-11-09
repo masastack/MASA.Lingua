@@ -1,5 +1,7 @@
 # MASA.Lingua 接入文档
 
+> English overview: pick a guide by client type — Vue 3 (`@lingua/vue`), ASP.NET Core (`MASA.Lingua.SDK.AspNetCore`), MASA Framework I18n / Masa.Blazor (`MASA.Lingua.SDK.MasaI18n` / `MASA.Lingua.SDK.MasaBlazor`), .NET MAUI (`MASA.Lingua.SDK.Maui`), or the build-time `lingua-sync` CLI. See also [docs/README.md](../README.md) for the bilingual index. Chinese guide below.
+
 业务项目怎么接入 Lingua，按项目类型选一份：
 
 | 项目类型 | 文档 | 包 / 工具 | 热更新 |

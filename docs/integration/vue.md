@@ -1,5 +1,7 @@
 # 接入 Vue 3（vue-i18n）
 
+> English summary: integrating Lingua into Vue 3 + vue-i18n via `@lingua/vue` — ETag/304 bundle caching plus SSE + polling hot updates (`startHotUpdate()`). Package README: [packages/lingua-vue](../../packages/lingua-vue/README.md). Chinese guide below.
+
 适用：Vue 3 + `vue-i18n` v9 / v10（Composition API 模式，`legacy: false`）。
 
 ## 前置条件

@@ -1,5 +1,7 @@
 # lingua-sync 命令行
 
+> English summary: `lingua-sync` is a zero-dependency Node 18+ CLI shipped with `@lingua/vue` — `pull` (build-time fallback bundles), `push` (bulk import) and `check` (CI completeness/placeholder/glossary checks). Chinese reference below.
+
 随 `@lingua/vue` 一起提供（`packages/lingua-vue/bin/lingua-sync.mjs`），Node ≥ 18，**不依赖 Vue**
 （构建期拉兜底包与前端框架无关）。三个命令：
 
