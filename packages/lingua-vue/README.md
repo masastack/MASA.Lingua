@@ -86,7 +86,7 @@ Common options (also settable in `lingua.config.json`):
 
 ```bash
 npm install
-npm test   # node --test test/*.test.mjs
+npm test   # node --test (auto-discovers test/*.test.mjs)
 ```
 
 ## License
