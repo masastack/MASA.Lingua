@@ -21,12 +21,12 @@ npm i @lingua/vue vue-i18n
 ```jsonc
 // package.json
 "dependencies": {
-  "@lingua/vue": "^1.3.0",
+  "@lingua/vue": "^0.0.1-preview.1",
   "vue-i18n": "^9.0.0"
 }
 ```
 
-如果 npm 上还没有需要的版本（`packages/lingua-vue` 的 `package.json` 当前版本 `1.3.0`），
+如果 npm 上还没有需要的版本（`packages/lingua-vue` 的 `package.json` 当前版本 `0.0.1-preview.1`），
 让维护方先发布；在此之前**不要**用 `file:` 路径依赖接进业务仓库——那会让构建依赖开发机的目录结构，CI 上必然失败。
 
 ## 2. 初始化

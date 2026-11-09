@@ -13,11 +13,11 @@
 
 ## 1. 引用
 
-从 nuget.org 安装。版本号以 nuget.org 上的实际发布号为准（当前 `1.3.0`）：
+从 nuget.org 安装。版本号以 nuget.org 上的实际发布号为准（当前 `0.0.1-preview.1`）：
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="MASA.Lingua.SDK.AspNetCore" Version="1.3.0" />
+  <PackageReference Include="MASA.Lingua.SDK.AspNetCore" Version="0.0.1-preview.1" />
 </ItemGroup>
 ```
 
@@ -26,7 +26,7 @@
 ```xml
 <!-- Directory.Packages.props -->
 <ItemGroup>
-  <PackageVersion Include="MASA.Lingua.SDK.AspNetCore" Version="1.3.0" />
+  <PackageVersion Include="MASA.Lingua.SDK.AspNetCore" Version="0.0.1-preview.1" />
 </ItemGroup>
 
 <!-- 消费方 csproj -->
@@ -167,7 +167,7 @@ app.MapLinguaStatus().AllowAnonymous();        // 默认路径 /api/lingua/statu
 换的是**词条来源**，业务调用点一行都不用改。
 
 ```xml
-<PackageReference Include="MASA.Lingua.SDK.MasaI18n" Version="1.3.0" />
+<PackageReference Include="MASA.Lingua.SDK.MasaI18n" Version="0.0.1-preview.1" />
 ```
 
 `MasaI18n` 包本身依赖 `MASA.Lingua.SDK.AspNetCore` 与 `MASA.Lingua.Core`，所以只需引用这一个包；
@@ -246,7 +246,7 @@ app.UseLinguaI18n();
 适用：Blazor（含 MFE 子应用）里直接用 Masa.Blazor 的 `T()` / `I18n`，希望词条由平台统一管理。
 
 ```xml
-<PackageReference Include="MASA.Lingua.SDK.MasaBlazor" Version="1.3.0" />
+<PackageReference Include="MASA.Lingua.SDK.MasaBlazor" Version="0.0.1-preview.1" />
 ```
 
 ```csharp

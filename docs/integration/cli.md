@@ -24,7 +24,7 @@ npx lingua-sync check --remote
 
 ```jsonc
 // package.json
-"devDependencies": { "@lingua/vue": "^1.3.0" },
+"devDependencies": { "@lingua/vue": "^0.0.1-preview.1" },
 "scripts": {
   "i18n:pull": "lingua-sync pull",
   "i18n:check": "lingua-sync check"

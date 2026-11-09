@@ -6,53 +6,27 @@ All notable changes to MASA.Lingua are documented in this file. The format follo
 
 ## [Unreleased]
 
-- Open-sourced the repository under the Apache License 2.0.
-- Moved NuGet package publishing from the internal CI to GitHub Actions (`package_push_nuget.org.yml`, triggered by GitHub Releases).
-- Site deployment stays on the internal GitLab, fed by a GitHub-to-GitLab mirror workflow.
+## [0.0.1-preview.1]
 
-### Changed
-
-- `MASA.Lingua.SDK.MasaI18n`: synced bundles are now written to `{LocalJsonDirectory}/.lingua-cache/` instead of overwriting the shipped `{culture}.json` files. The shipped files stay untouched and act as a frozen fallback, so keys that exist only locally keep resolving after a restart. Anything that relied on the root `{culture}.json` files being updated with platform content should read `.lingua-cache/` instead.
-
-### Fixed
-
-- `MASA.Lingua.SDK.MasaI18n`: local-only keys no longer disappear after the first sync on Linux (MASA's file reload raced with the sync overwrite).
-
-## [1.3.0]
+First public preview of MASA.Lingua, open-sourced under the Apache License 2.0.
 
 ### Added
 
-- `MASA.Lingua.SDK.Maui` — localizer for .NET MAUI / Blazor Hybrid / WPF clients, syncing at startup and on resume.
-- Project **write keys**: the missing-key telemetry endpoint now requires a per-project write key (`X-Lingua-Key`); only server-side SDKs report.
-- Standalone PostgreSQL migrations package (`MASA.Lingua.Storage.Migrations.PostgreSql`).
-
-### Changed
-
-- Storage is PostgreSQL-only; the SQLite path was removed.
-- Publish artifacts and bundle ETags are fully deterministic — server restarts restore published bundles byte-for-byte from database snapshots.
-
-## [1.2.0]
-
-### Added
-
-- `lingua-sync` CLI (`pull` / `push` / `check`) for build-time bundle pulls, bulk import and CI checks.
-- Import endpoint (`import-json`) with optional immediate publish and a 10 MB request cap.
+- Blazor admin UI: translation entry matrix, namespace and culture management, glossary and import/export tooling.
+- Deterministic bundle compiler producing nested/flat `{culture}.json` with SHA-256-based ETags; published bundles restore byte-for-byte across server restarts.
+- Distribution endpoints with strong ETag / `Cache-Control: no-cache` / 304 semantics, plus an SSE publish stream with `Last-Event-ID` catch-up.
 - Global shared namespaces (`common` / `errors`) merged into per-project bundles with layered fallback.
-
-## [1.1.0]
-
-### Added
-
+- Import endpoint (`import-json`) with optional immediate publish and a 10 MB request cap.
 - AI-assisted batch translation via Microsoft.Extensions.AI (any OpenAI-compatible endpoint), gated by deterministic validation.
-- Glossary enforcement: mandatory terms validated at entry and publish time, with compliance reporting.
+- Glossary enforcement validated at entry and publish time, with compliance reporting.
 - Publish policy gates with explicit `publishBlockedReason` reporting.
-
-## [1.0.0]
-
-### Added
-
-- Initial release: Blazor admin UI, translation entry matrix, namespace/culture management.
-- Deterministic bundle compiler producing nested/flat `{culture}.json` with SHA-256-based ETags.
-- Distribution endpoints with strong ETag / `Cache-Control: no-cache` / 304 semantics.
-- SSE publish stream with `Last-Event-ID` catch-up.
-- `MASA.Lingua.SDK.AspNetCore` (`IStringLocalizer` adapter with SSE + polling hot reload) and `MASA.Lingua.SDK.MasaI18n` (MASA Framework bridge).
+- PostgreSQL-only persistence, with a standalone EF migrations package (`MASA.Lingua.Storage.Migrations.PostgreSql`).
+- Missing-key telemetry gated by per-project write keys (`X-Lingua-Key`); only server-side SDKs report.
+- `lingua-sync` CLI (`pull` / `push` / `check`) for build-time bundle pulls, bulk import and CI checks, plus the `@lingua/vue` Vue 3 adapter on npm.
+- Six NuGet packages sharing one version number:
+  - `MASA.Lingua.Core` — i18n core domain, bundle compiler, JSON converter, and deterministic validation engine.
+  - `MASA.Lingua.SDK.Abstractions` — lightweight client abstractions shared by the SDK packages.
+  - `MASA.Lingua.SDK.AspNetCore` — ASP.NET Core `IStringLocalizer` adapter over local `{culture}.json` files, with FrozenDictionary lookups, file watching, and ETag/SSE hot reload (polling fallback).
+  - `MASA.Lingua.SDK.MasaI18n` — bridge to MASA Framework I18n (`II18n` / `I18n.T`); synced bundles are written to `{LocalJsonDirectory}/.lingua-cache/`, while the shipped `{culture}.json` files stay untouched as a frozen fallback.
+  - `MASA.Lingua.SDK.MasaBlazor` — language resource adapter for Blazor (Server/Wasm) + Masa.Blazor: merges from a shared hot-reloading store when present, otherwise pulls published bundles at startup; static `wwwroot/i18n` JSON remains the offline fallback.
+  - `MASA.Lingua.SDK.Maui` — localizer for .NET MAUI / Blazor Hybrid / WPF clients, syncing at startup and on resume; no MAUI workload dependency, usable from any .NET 8/10 client app.

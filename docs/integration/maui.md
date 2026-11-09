@@ -19,18 +19,18 @@
 
 ## 1. 引用
 
-从 nuget.org 安装（版本以 nuget.org 上的实际发布号为准，当前 `1.3.0`）：
+从 nuget.org 安装（版本以 nuget.org 上的实际发布号为准，当前 `0.0.1-preview.1`）：
 
 ```xml
 <ItemGroup>
-  <PackageReference Include="MASA.Lingua.SDK.Maui" Version="1.3.0" />
+  <PackageReference Include="MASA.Lingua.SDK.Maui" Version="0.0.1-preview.1" />
 </ItemGroup>
 ```
 
 用中央包管理时版本写在 `Directory.Packages.props`，csproj 里只留包名：
 
 ```xml
-<PackageVersion Include="MASA.Lingua.SDK.Maui" Version="1.3.0" />
+<PackageVersion Include="MASA.Lingua.SDK.Maui" Version="0.0.1-preview.1" />
 ```
 
 ## 2. 注册
