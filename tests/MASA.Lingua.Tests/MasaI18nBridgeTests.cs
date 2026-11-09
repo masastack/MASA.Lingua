@@ -98,6 +98,13 @@ public sealed class MasaI18nBridgeTests
                 // 6. 仅存在于本地文件的 Key：Lingua 没有，走本地 JSON 兜底
                 Assert.Equal("仅本地兜底", i18n.T("LocalOnlyKey"));
 
+                // 同步只写缓存子目录，发布的兜底文件原样保留 —— 重启后兜底依旧完整
+                var shippedZh = await File.ReadAllTextAsync(Path.Combine(localDir, "zh-CN.json"));
+                Assert.Contains("LocalOnlyKey", shippedZh);
+                var cachedZh = await File.ReadAllTextAsync(
+                    Path.Combine(localDir, MasaI18nBridgeExtensions.SyncCacheDirectoryName, "zh-CN.json"));
+                Assert.Contains("当前角色不存在", cachedZh);
+
                 // 7. 热更新：平台改词并重新发布 → 再同步 → 下一笔取词立即生效（无缓存、无需重启）
                 using (var scope = factory.Services.CreateScope())
                 {
@@ -195,7 +202,8 @@ public sealed class MasaI18nBridgeTests
                 Assert.Equal("确定", i18n.T("common.ok"));
 
                 // 写盘产物必须是「根级裸 key + common 子对象」，这是「平铺 key 能命中」的物理证据
-                var publishedZh = await File.ReadAllTextAsync(Path.Combine(localDir, "zh-CN.json"));
+                var publishedZh = await File.ReadAllTextAsync(
+                    Path.Combine(localDir, MasaI18nBridgeExtensions.SyncCacheDirectoryName, "zh-CN.json"));
                 Assert.Contains("\"UserNotExist\"", publishedZh);
                 Assert.DoesNotContain("\"errors\"", publishedZh);
 

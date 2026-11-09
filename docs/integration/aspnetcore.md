@@ -225,12 +225,13 @@ app.UseLinguaI18n();
    （`LinguaJsonSyncService` 用的是 `Add` 而不是 `TryAdd`）。
 2. **`LocalJsonDirectory` 的相对路径基准是 `AppContext.BaseDirectory`**（不是进程工作目录），与 `AddLinguaLocalization` 单独使用时不同。
    容器 / Windows 服务部署时这是好事，但别按 CWD 去推算路径。
-3. **本地 JSON 是真正的兜底层**：桥接会保留一份本地 contributor 快照，平台没有的 key 仍能从本地取到；
+3. **本地 JSON 是真正的兜底层**：桥接把同步产物写到 `LocalJsonDirectory/.lingua-cache/`，发布的 `{culture}.json`
+   永不被覆盖，平台没有的 key 始终（包括重启后）能从本地取到；
    而 `AddLinguaLocalization` 单独使用时，首次同步会用平台内容整语种覆盖本地文件与字典。
    所以 `Assets/I18n/*.json` 要随程序集输出（`CopyToOutputDirectory`），并拷进输出目录的 `i18n/`。
    **key 的形态必须与平台发布产物一致**：如果业务调用是平铺 key（`I18n.T("UserNotExist")`），
    平台里这些词条就要放在**项目根命名空间**，发布成扁平根 key；放进命名空间会发布成嵌套对象，
-   平铺 key 取不到，且覆盖本地文件后会连兜底一起失效。
+   平铺 key 从平台取不到，只能落到本地兜底。
 4. **支持哪些语种完全由平台决定**，本地文件不参与协商。同步服务把 manifest 的 `cultures` 写进
    `ILinguaMemoryStore.SupportedCultures`，`UseLinguaI18n()` 在请求管道里用它覆盖
    `RequestLocalizationOptions.SupportedCultures/SupportedUICultures`。所以**平台新增语种并发布后，客户端无需改配置、无需放本地文件、无需重启**。
