@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # NuGet OIDC login requires an OIDC token
+      contents: read # checkout of the release tag（私有仓库时默认 token 没有这一项会直接 checkout 失败）
 
     steps:
       - name: Checkout

@@ -63,16 +63,23 @@ elif [ -n "$PROJECTS" ]; then
 fi
 
 if [ ${#PROJECT_LIST[@]} -eq 0 ]; then
+    # 与 Directory.Build.props 的打包条件保持一致：只有 Core 与 SDK.* 产出 NuGet 包。
+    # Server / Storage / AI / Tests 不产出，绝不能因为自动发现而被打出来推送到 nuget.org。
     mapfile -t PROJECT_LIST < <(
         find . -name '*.csproj' \
             -not -path '*/bin/*' -not -path '*/obj/*' \
             -not -path "*/${ARTIFACTS_DIR%/}/*" \
             -not -path '*/tests/*' -not -path '*/test/*' \
             -not -name '*.Tests.csproj' -not -name '*.Test.csproj' \
+            | while IFS= read -r p; do
+                case "$(basename "$p" .csproj)" in
+                    MASA.Lingua.Core|MASA.Lingua.SDK.*) printf '%s\n' "$p" ;;
+                esac
+              done \
             | sort
     )
     [ ${#PROJECT_LIST[@]} -gt 0 ] || die "no project to pack; set PROJECTS"
-    warn "PROJECTS not set, auto-detected ${#PROJECT_LIST[@]} project(s)"
+    warn "PROJECTS not set, auto-detected ${#PROJECT_LIST[@]} product package(s)"
 fi
 
 for proj in "${PROJECT_LIST[@]}"; do
