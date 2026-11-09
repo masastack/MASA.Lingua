@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose an idea or improvement for MASA.Lingua
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to achieve, and what is missing or painful today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: What you'd like to happen. APIs, config keys, or UI behavior sketches are welcome.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Affected area
+      options:
+        - label: Server / admin UI
+        - label: SDKs (AspNetCore / MasaI18n / MasaBlazor / Maui)
+        - label: @lingua/vue / lingua-sync CLI
+        - label: AI translation
+        - label: Docs
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Would you like to implement it?
+      options:
+        - label: I am willing to submit a PR for this
