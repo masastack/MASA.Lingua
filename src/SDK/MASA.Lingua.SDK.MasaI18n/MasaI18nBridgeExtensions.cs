@@ -1,5 +1,6 @@
-using System.Globalization;
+using System.Collections.Frozen;
 using Masa.BuildingBlocks.Globalization.I18n;
+using MASA.Lingua.Core.Serialization;
 using MASA.Lingua.SDK.Abstractions;
 using MASA.Lingua.SDK.AspNetCore;
 using MASA.Lingua.SDK.MasaI18n;
@@ -65,14 +66,23 @@ public static class MasaI18nBridgeExtensions
         // 这里顺序无语义，默认语种也不从这里推断。
         var cultures = ScanLocalCultures(localDirectory);
         var syncCacheDirectory = localDirectory is null ? null : Path.Combine(localDirectory, SyncCacheDirectoryName);
+        // 本地兜底层：把注册时扫描到的 {culture}.json 冻结为只读字典。
+        // 不走 MASA 的 AddJson / LocalI18nResourceContributor —— 其路径解析（PathUtils 会剥掉前导 '/'
+        // 再与 BaseDirectory 拼接）在 Linux 上对绝对目录静默失效，且热重载语义会把结果交给文件事件时序。
+        // 冻结层让兜底在所有平台、任何时序下行为一致：平台没有的 key 恒按注册时的本地文案解析。
+        var localSnapshot = LoadLocalSnapshot(localDirectory, cultures);
 
-        // 1) MASA I18n 基础设施。本地 JSON 目录同时作为 MASA 的 IConfiguration 资源源，
-        //    产生的 LocalI18nResourceContributor 会在第 3 步被保留为兜底层。
+        // 1) MASA I18n 基础设施。本地 JSON 目录同时作为 MASA 的 IConfiguration 资源源
+        //    （读侧不依赖它产生的 contributor —— 第 3 步的兜底用上面的注册时冻结快照）。
         services.AddI18n(settings =>
         {
-            settings.ResourcesDirectory = string.IsNullOrWhiteSpace(localDirectory)
-                ? Path.Combine(I18nResourceResourceConfiguration.BaseDirectory, "i18n")
-                : localDirectory;
+            // ResourcesDirectory 必须传「相对 BaseDirectory 的路径」：MASA 的 PathUtils.ParseResourcesDirectory
+            // 会剥掉前导 '/' 后与 BaseDirectory 拼接 —— 绝对路径在 Windows 靠驱动器号侥幸原样通过，
+            // 在 Linux 则拼成 {BaseDirectory}/tmp/... 的无效路径，整张资源表静默缺失。
+            // GetRelativePath 在跨卷时退化为绝对路径，Windows 原生支持该形态。
+            settings.ResourcesDirectory = localDirectory is null
+                ? "i18n"
+                : Path.GetRelativePath(I18nResourceResourceConfiguration.BaseDirectory, localDirectory);
             settings.SupportedCultures = cultures.Select(c => new CultureModel(c)).ToList();
             cultureSettings?.Invoke(settings);
         });
@@ -107,7 +117,7 @@ public static class MasaI18nBridgeExtensions
         var originalResource = I18nResourceResourceConfiguration.Resources.GetOrNull<DefaultResource>();
         var contributorRegistry = new ContributorRegistry(
             originalResource?.BaseResourceTypes ?? Enumerable.Empty<Type>(),
-            originalResource, store);
+            originalResource, store, localSnapshot);
 
         foreach (var culture in cultures)
         {
@@ -129,7 +139,8 @@ public static class MasaI18nBridgeExtensions
     private sealed class ContributorRegistry(
         IEnumerable<Type> baseResourceTypes,
         I18nResource? originalResource,
-        ILinguaMemoryStore store)
+        ILinguaMemoryStore store,
+        IReadOnlyDictionary<string, FrozenDictionary<string, string>> localSnapshot)
     {
         private readonly object _lock = new();
         private readonly List<Type> _baseResourceTypes = [.. baseResourceTypes];
@@ -150,9 +161,13 @@ public static class MasaI18nBridgeExtensions
                     return;
                 }
 
-                // 本地 JSON 兜底 contributor 从 AddI18n 建立的原始资源表里取（该表此后不再被读侧使用）
-                var localContributor = originalResource?.GetResourceContributor(new CultureInfo(culture));
-                _registered[culture] = new LinguaI18nResourceContributor(culture, store, localContributor);
+                // 本地兜底 = 注册时冻结的本地 {culture}.json（见 LoadLocalSnapshot）：
+                // 跨平台确定，不依赖 MASA 的文件路径解析与热重载时序。
+                II18nResourceContributor? fallback = localSnapshot.TryGetValue(culture, out var snapshotEntries)
+                    ? new LocalSnapshotFallbackContributor(culture, snapshotEntries)
+                    : null;
+
+                _registered[culture] = new LinguaI18nResourceContributor(culture, store, fallback);
 
                 var replacement = new I18nResource(typeof(DefaultResource), _baseResourceTypes);
                 foreach (var registered in _registered)
@@ -163,6 +178,59 @@ public static class MasaI18nBridgeExtensions
                 I18nResourceResourceConfiguration.Resources[typeof(DefaultResource)] = replacement;
             }
         }
+    }
+
+    /// <summary>
+    /// 把注册时扫描到的本地 {culture}.json 冻结成「语种 → 扁平 key 字典」快照（只读、永不再变）。
+    /// 读不出（缺失 / 损坏）的语种跳过：快照只是兜底层，不挡任何其他层。
+    /// </summary>
+    private static IReadOnlyDictionary<string, FrozenDictionary<string, string>> LoadLocalSnapshot(
+        string? directory,
+        IReadOnlyList<string> cultures)
+    {
+        var snapshot = new Dictionary<string, FrozenDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory) || cultures.Count == 0)
+        {
+            return snapshot;
+        }
+
+        foreach (var culture in cultures)
+        {
+            var path = Path.Combine(directory, $"{culture}.json");
+            if (!File.Exists(path))
+            {
+                continue;
+            }
+
+            try
+            {
+                var entries = JsonBundleConverter.FlattenToLookupDictionary(File.ReadAllBytes(path))
+                    .ToFrozenDictionary(StringComparer.Ordinal);
+                if (entries.Count > 0)
+                {
+                    snapshot[culture] = entries;
+                }
+            }
+            catch
+            {
+                // 损坏 / 被占用的本地文件：跳过该语种的快照，不阻塞启动
+            }
+        }
+
+        return snapshot;
+    }
+
+    /// <summary>注册时本地 JSON 快照的兜底 contributor：只按冻结字典解析，与 Lingua store 相同的 key 归一规则。</summary>
+    private sealed class LocalSnapshotFallbackContributor(
+        string cultureName,
+        FrozenDictionary<string, string> entries) : II18nResourceContributor
+    {
+        public string CultureName { get; } = cultureName;
+
+        public string? GetOrNull(string name) =>
+            entries.TryGetValue(name, out var value) || entries.TryGetValue(name.Replace(':', '.'), out value)
+                ? value
+                : null;
     }
 
     /// <summary>

@@ -225,8 +225,9 @@ app.UseLinguaI18n();
    （`LinguaJsonSyncService` 用的是 `Add` 而不是 `TryAdd`）。
 2. **`LocalJsonDirectory` 的相对路径基准是 `AppContext.BaseDirectory`**（不是进程工作目录），与 `AddLinguaLocalization` 单独使用时不同。
    容器 / Windows 服务部署时这是好事，但别按 CWD 去推算路径。
-3. **本地 JSON 是真正的兜底层**：桥接把同步产物写到 `LocalJsonDirectory/.lingua-cache/`，发布的 `{culture}.json`
-   永不被覆盖，平台没有的 key 始终（包括重启后）能从本地取到；
+3. **本地 JSON 是真正的兜底层**：桥接在注册时把发布的 `{culture}.json` 冻结为只读兜底 contributor，
+   并把同步产物写到 `LocalJsonDirectory/.lingua-cache/`——发布的兜底文件永不被覆盖，平台没有的 key
+   始终（包括重启后）能从本地取到；
    而 `AddLinguaLocalization` 单独使用时，首次同步会用平台内容整语种覆盖本地文件与字典。
    所以 `Assets/I18n/*.json` 要随程序集输出（`CopyToOutputDirectory`），并拷进输出目录的 `i18n/`。
    **key 的形态必须与平台发布产物一致**：如果业务调用是平铺 key（`I18n.T("UserNotExist")`），
