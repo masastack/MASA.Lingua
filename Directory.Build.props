@@ -22,14 +22,29 @@
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'MASA.Lingua.Core' Or $(MSBuildProjectName.StartsWith('MASA.Lingua.SDK.'))">
     <Version>1.3.0</Version>
     <Authors>MASA</Authors>
+    <Owners>MASA</Owners>
+    <Copyright>Copyright © MASA</Copyright>
+    <Product>MASA.Lingua</Product>
+    <PackageTags>i18n;localization;translation;lingua;masa</PackageTags>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/masastack/MASA.Lingua</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReleaseNotes>https://github.com/masastack/MASA.Lingua/releases</PackageReleaseNotes>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <!-- Release 配置下随构建直接产出 nupkg/snupkg，Debug 构建不打包 -->
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
   </PropertyGroup>
+
+  <!--
+    NuGet 图标与包内 README：nuget.org 的包详情页渲染 PackageIcon 与 PackageReadmeFile。
+    6 个包共用仓库根的 icon.png / README.md（同一产品的子组件，包内文档统一指向平台级说明）。
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'MASA.Lingua.Core' Or $(MSBuildProjectName.StartsWith('MASA.Lingua.SDK.'))">
+    <None Include="$(MSBuildThisFileDirectory)icon.png" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
 </Project>
