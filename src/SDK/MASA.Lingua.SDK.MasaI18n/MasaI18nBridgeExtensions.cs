@@ -72,17 +72,14 @@ public static class MasaI18nBridgeExtensions
         // 冻结层让兜底在所有平台、任何时序下行为一致：平台没有的 key 恒按注册时的本地文案解析。
         var localSnapshot = LoadLocalSnapshot(localDirectory, cultures);
 
-        // 1) MASA I18n 基础设施。本地 JSON 目录同时作为 MASA 的 IConfiguration 资源源
-        //    （读侧不依赖它产生的 contributor —— 第 3 步的兜底用上面的注册时冻结快照）。
+        // 1) MASA I18n 基础设施。读侧不依赖它为 DefaultResource 产生的 contributor（第 3 步整表替换，
+        //    兜底用上面的注册时冻结快照），所以 MASA 的 AddJson 在 Linux 上解析不了绝对路径也无影响。
         services.AddI18n(settings =>
         {
-            // ResourcesDirectory 必须传「相对 BaseDirectory 的路径」：MASA 的 PathUtils.ParseResourcesDirectory
-            // 会剥掉前导 '/' 后与 BaseDirectory 拼接 —— 绝对路径在 Windows 靠驱动器号侥幸原样通过，
-            // 在 Linux 则拼成 {BaseDirectory}/tmp/... 的无效路径，整张资源表静默缺失。
-            // GetRelativePath 在跨卷时退化为绝对路径，Windows 原生支持该形态。
-            settings.ResourcesDirectory = localDirectory is null
-                ? "i18n"
-                : Path.GetRelativePath(I18nResourceResourceConfiguration.BaseDirectory, localDirectory);
+            // 必须传绝对路径：本地目录里没有任何 {culture}.json 时，MASA 的 CultureUtils 直接用这个路径读
+            // supportedCultures.json（不拼 BaseDirectory），相对路径会按进程工作目录解析。
+            settings.ResourcesDirectory = localDirectory
+                ?? Path.Combine(I18nResourceResourceConfiguration.BaseDirectory, "i18n");
             settings.SupportedCultures = cultures.Select(c => new CultureModel(c)).ToList();
             cultureSettings?.Invoke(settings);
         });
@@ -117,7 +114,7 @@ public static class MasaI18nBridgeExtensions
         var originalResource = I18nResourceResourceConfiguration.Resources.GetOrNull<DefaultResource>();
         var contributorRegistry = new ContributorRegistry(
             originalResource?.BaseResourceTypes ?? Enumerable.Empty<Type>(),
-            originalResource, store, localSnapshot);
+            store, localSnapshot);
 
         foreach (var culture in cultures)
         {
@@ -138,7 +135,6 @@ public static class MasaI18nBridgeExtensions
     /// </summary>
     private sealed class ContributorRegistry(
         IEnumerable<Type> baseResourceTypes,
-        I18nResource? originalResource,
         ILinguaMemoryStore store,
         IReadOnlyDictionary<string, FrozenDictionary<string, string>> localSnapshot)
     {

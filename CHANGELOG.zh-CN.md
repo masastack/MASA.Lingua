@@ -10,6 +10,14 @@ MASA.Lingua 的所有显著变更记录于此。格式遵循 [Keep a Changelog](
 - NuGet 包发布从内部 CI 迁移到 GitHub Actions（`package_push_nuget.org.yml`，由 GitHub Release 触发）。
 - 站点部署保留在内部 GitLab，由 GitHub→GitLab 镜像工作流馈送。
 
+### 变更
+
+- `MASA.Lingua.SDK.MasaI18n`：同步产物改写到 `{LocalJsonDirectory}/.lingua-cache/`，不再覆盖随程序发布的 `{culture}.json`。发布的文件保持原样、作为冻结兜底，只在本地存在的 key 重启后仍能取到。依赖根目录 `{culture}.json` 会被更新为平台内容的脚本或组件，需改读 `.lingua-cache/`。
+
+### 修复
+
+- `MASA.Lingua.SDK.MasaI18n`：Linux 上首次同步后只在本地存在的 key 不再丢失（MASA 的文件热重载与同步覆盖存在竞态）。
+
 ## [1.3.0]
 
 ### 新增

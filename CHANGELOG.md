@@ -10,6 +10,14 @@ All notable changes to MASA.Lingua are documented in this file. The format follo
 - Moved NuGet package publishing from the internal CI to GitHub Actions (`package_push_nuget.org.yml`, triggered by GitHub Releases).
 - Site deployment stays on the internal GitLab, fed by a GitHub-to-GitLab mirror workflow.
 
+### Changed
+
+- `MASA.Lingua.SDK.MasaI18n`: synced bundles are now written to `{LocalJsonDirectory}/.lingua-cache/` instead of overwriting the shipped `{culture}.json` files. The shipped files stay untouched and act as a frozen fallback, so keys that exist only locally keep resolving after a restart. Anything that relied on the root `{culture}.json` files being updated with platform content should read `.lingua-cache/` instead.
+
+### Fixed
+
+- `MASA.Lingua.SDK.MasaI18n`: local-only keys no longer disappear after the first sync on Linux (MASA's file reload raced with the sync overwrite).
+
 ## [1.3.0]
 
 ### Added
