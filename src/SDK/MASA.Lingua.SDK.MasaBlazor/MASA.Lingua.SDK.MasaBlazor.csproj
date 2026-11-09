@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 双目标：Blazor Server(net10) 与 Blazor Wasm(net8) 共用。 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>Language resource adapter for MASA.Lingua on Blazor (Server/Wasm) + Masa.Blazor apps. Two modes auto-selected: when a shared Lingua store is registered (e.g. alongside AddLinguaMasaI18n in a Blazor Server host) it merges terms from the hot-reloading store and follows culture-update notifications — UI and backend terms share one SSE/polling sync chain; otherwise a startup pull fetches published {culture}.json bundles before first render. Static wwwroot/i18n JSON always remains as the offline fallback.</Description>
+    <PackageTags>i18n;localization;masa;lingua;blazor;wasm</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Masa.Blazor 1.11.9 单一版本：net10 目标消费其 net8/netstandard 资产 -->
+    <PackageReference Include="Masa.Blazor" Version="1.11.9" />
+  </ItemGroup>
+
+  <!-- 条件引用只改版本、不改包名集合 -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MASA.Lingua.SDK.Abstractions\MASA.Lingua.SDK.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

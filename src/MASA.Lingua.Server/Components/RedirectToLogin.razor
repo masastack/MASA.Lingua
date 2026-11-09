@@ -1,0 +1,11 @@
+@inject NavigationManager Nav
+
+@code {
+    // 未登录时强制整页跳转到 /login（服务端端点 → OIDC challenge → 公司 MASA Auth）。
+    // 必须 forceLoad：Blazor 的客户端路由不会发起会让浏览器 302 的导航请求。
+    protected override void OnInitialized()
+    {
+        var returnUrl = Uri.EscapeDataString(Nav.ToBaseRelativePath(Nav.Uri) is { Length: > 0 } rel ? "/" + rel : "/");
+        Nav.NavigateTo($"/login?returnUrl={returnUrl}", forceLoad: true);
+    }
+}

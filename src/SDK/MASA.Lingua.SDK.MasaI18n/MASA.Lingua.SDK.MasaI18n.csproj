@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 双目标：MASA I18n 桥接同时服务 net8 与 net10 宿主。 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>Bridge adapter between MASA.Lingua SDK and MASA.Framework I18n (II18n / I18n.T). Wires the hot-reloading Lingua memory store into MASA's II18nResourceContributor pipeline, so existing I18n.T call sites pick up published translations without any code change.</Description>
+    <PackageTags>i18n;localization;masa;lingua</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Masa.BuildingBlocks.Globalization.I18n" Version="1.2.0-preview.18" />
+    <PackageReference Include="Masa.Contrib.Globalization.I18n" Version="1.2.0-preview.18" />
+    <!-- UseI18n / RequestCultureProvider 来自 Globalization.I18n.AspNetCore 与 ASP.NET Core 框架本身 -->
+    <PackageReference Include="Masa.Contrib.Globalization.I18n.AspNetCore" Version="1.2.0-preview.18" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MASA.Lingua.SDK.AspNetCore\MASA.Lingua.SDK.AspNetCore.csproj" />
+  </ItemGroup>
+
+</Project>

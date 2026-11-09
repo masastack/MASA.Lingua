@@ -1,0 +1,325 @@
+@page "/glossary"
+@inherits MASA.Lingua.Server.Components.Pages.LinguaPageBase
+@inject ILinguaRepository Repository
+@inject IJSRuntime JS
+@inject DeterministicTranslationValidator Validator
+@inject WorkspaceScope Scope
+
+<PageTitle>术语库 · MASA.Lingua</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>术语库</h1>
+        <p class="lede">@Lede</p>
+    </div>
+    <div class="page-actions">
+        <button class="btn primary" type="button" @onclick="StartCreate">新增术语</button>
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="notice @(_statusIsError ? "neg" : "")" role="status">
+        <span>@_statusMessage</span>
+        <button class="x" type="button" aria-label="关闭提示" @onclick="() => _statusMessage = null">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+        </button>
+    </div>
+}
+
+@if (_formOpen)
+{
+    <form class="panel raised form" @onsubmit="SaveTermAsync">
+        <div class="panel-head">
+            <h2>@(_editingId is null ? "新增标准术语" : $"编辑术语：{_sourceTerm}")</h2>
+            <span class="meta">术语用于 AI 翻译 Prompt 注入与规则校验；违反术语的译文会被标记为「待复核」</span>
+        </div>
+
+        <div class="term-form">
+            <label class="field">
+                <span>源术语 <span class="hint">@ScopeSourceLabel</span></span>
+                <input class="input" @bind="_sourceTerm" placeholder="如 工作台" />
+            </label>
+            @foreach (var culture in ScopeCultures)
+            {
+                var c = culture;
+                <label class="field">
+                    <span>@UiText.Locale(c) 标准译法 <span class="hint mono">@c</span></span>
+                    <input class="input" lang="@c"
+                           value="@GetInput(c)"
+                           @onchange="@(e => _inputs[c] = e.Value?.ToString() ?? string.Empty)"
+                           placeholder="@(_doNotTranslate ? "禁止翻译：保持原样" : "标准译法")"
+                           disabled="@_doNotTranslate" />
+                </label>
+            }
+            <label class="field wide">
+                <span>备注说明</span>
+                <input class="input" @bind="_description" placeholder="术语适用范围说明" />
+            </label>
+        </div>
+
+        @if (!_doNotTranslate)
+        {
+            <div class="term-form term-advanced">
+                @foreach (var culture in ScopeCultures)
+                {
+                    var c = culture;
+                    <label class="field">
+                        <span>@UiText.Locale(c) 可接受变体 <span class="hint">逗号分隔；出现标准译法或任一变体都算遵循</span></span>
+                        <input class="input" lang="@c"
+                               value="@_variantInputs.GetValueOrDefault(c, "")"
+                               @onchange="@(e => _variantInputs[c] = e.Value?.ToString() ?? string.Empty)"
+                               placeholder="如 Work space" />
+                    </label>
+                    <label class="field">
+                        <span>@UiText.Locale(c) 禁用译法 <span class="hint">逗号分隔；出现即违规，即使同时含标准译法；按词边界精确匹配，复数/派生词（如 Dashboards）需单独列出</span></span>
+                        <input class="input" lang="@c"
+                               value="@_forbiddenInputs.GetValueOrDefault(c, "")"
+                               @onchange="@(e => _forbiddenInputs[c] = e.Value?.ToString() ?? string.Empty)"
+                               placeholder="如 Dashboard" />
+                    </label>
+                }
+            </div>
+        }
+
+        <div class="term-switches">
+            <label class="switch-row"><input class="switch" type="checkbox" role="switch" @bind="_doNotTranslate" />禁止翻译（品牌词）</label>
+            <span class="scope-note">译文需原样保留整词：如 LinguaPhone 不会视为保留了 Lingua。</span>
+            <label class="switch-row"><input class="switch" type="checkbox" role="switch" @bind="_caseSensitive" />区分大小写</label>
+        </div>
+
+        <div class="form-actions">
+            <button class="btn primary" type="submit">@(_editingId is null ? "添加术语" : "保存修改")</button>
+            <button class="btn" type="button" @onclick="CancelEdit">@(_editingId is null ? "收起" : "取消编辑")</button>
+        </div>
+    </form>
+}
+
+<div class="toolbar">
+    <div class="segmented" role="group" aria-label="术语作用域">
+        <button type="button" aria-pressed="@(ScopeProject is null ? "true" : "false")" @onclick="() => SetScopeAsync(false)">全局术语</button>
+        <button type="button" aria-pressed="@(ScopeProject is not null ? "true" : "false")"
+                disabled="@(CurrentProject is null)"
+                title="@(CurrentProject is null ? "请先在顶栏选择一个项目" : null)"
+                @onclick="() => SetScopeAsync(true)">
+            项目术语@(CurrentProject is null ? "" : " · " + CurrentProject.Code)
+        </button>
+    </div>
+    <span class="scope-note">
+        @(ScopeProject is null
+            ? "全局术语对所有项目生效；项目内如定义了同名术语，则以项目术语为准（完整覆盖）。"
+            : $"项目术语仅对「{ScopeProject.Code}」生效，并完整覆盖同名的全局术语。")
+    </span>
+</div>
+
+@if (_isLoading)
+{
+    <div class="empty roomy" role="status">正在加载术语与词条数据…</div>
+}
+else
+{
+@if (_usageComputing)
+{
+    <div class="toolbar" role="status">
+        <span class="scope-note">术语已更新，正在重新分析命中词条与遵循率…</span>
+    </div>
+}
+
+@if (_compliance.Count > 0)
+{
+    <div class="toolbar" aria-label="术语遵循率">
+        <strong>术语遵循率</strong>
+        <span class="scope-note">
+            统计单位为「词条 × 命中的术语」，只算有约束且已有译文的语种；@(ScopeProject is null ? "全局作用域为各项目合计" : "")
+        </span>
+        @foreach (var c in _compliance)
+        {
+            <span class="pill sm @(c.Percent is null ? "" : c.Percent >= 100 ? "pos" : c.Percent >= 80 ? "warn" : "neg")"
+                  title="@(c.Checked == 0 ? "没有受约束的术语命中" : $"{c.Followed}/{c.Checked} 遵循")">
+                @UiText.Locale(c.Culture) @(c.Percent is null ? "—" : $"{c.Percent}%")
+            </span>
+        }
+    </div>
+}
+
+<section class="block" aria-label="@(ScopeProject is null ? "全局术语" : "项目术语")">
+    @if (_terms.Count == 0)
+    {
+        <div class="empty roomy">
+            @(ScopeProject is null
+                ? "还没有全局术语。"
+                : $"项目「{ScopeProject.Code}」还没有自己的术语，当前沿用 {_globalTerms.Count} 条全局术语。")
+        </div>
+    }
+    else
+    {
+        <div class="table-wrap">
+            <table class="tbl stack-sm">
+                <thead>
+                    <tr>
+                        <th>源术语</th>
+                        <th>策略</th>
+                        @foreach (var c in ScopeCultures)
+                        {
+                            <th>@UiText.Locale(c) 标准译法<span class="mono">@c</span></th>
+                        }
+                        <th class="n">引用词条</th>
+                        <th>说明</th>
+                        <th class="act"><span class="sr-only">操作</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var term in _terms)
+                    {
+                        var t = term;
+                        <tr @key="t.Id">
+                            <td data-label="源术语">
+                                <strong>@t.SourceTerm</strong>
+                                @if (t.CaseSensitive)
+                                {
+                                    <span class="pill sm lead" title="区分大小写">Aa</span>
+                                }
+                            </td>
+                            <td data-label="策略">
+                                <span class="pill sm">@(t.DoNotTranslate ? "禁止翻译" : "统一译法")</span>
+                            </td>
+                            @foreach (var c in ScopeCultures)
+                            {
+                                <td lang="@c" data-label="@($"{UiText.Locale(c)} 标准译法")">@RenderTarget(t, c)</td>
+                            }
+                            <td class="n num" data-label="引用词条">@RefCount(t)</td>
+                            <td data-label="说明">@t.Description</td>
+                            <td class="act">
+                                <button class="link-btn" type="button" @onclick="() => StartEdit(t)">编辑</button>
+                                <button class="link-btn danger" type="button" @onclick="() => DeleteTermAsync(t)">删除</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@if (ScopeProject is not null)
+{
+    <section class="block" aria-labelledby="inherited-title">
+        <div class="panel-head">
+            <h2 id="inherited-title">继承的全局术语</h2>
+            <span class="meta">只读，共 @_globalTerms.Count 条；切换到「全局术语」后可编辑</span>
+        </div>
+
+        @if (_globalTerms.Count == 0)
+        {
+            <div class="empty">还没有全局术语。</div>
+        }
+        else
+        {
+            <div class="table-wrap">
+                <table class="tbl stack-sm">
+                    <thead>
+                        <tr>
+                            <th>源术语</th>
+                            <th>策略</th>
+                            @foreach (var c in ScopeCultures)
+                            {
+                                <th>@UiText.Locale(c) 标准译法<span class="mono">@c</span></th>
+                            }
+                            <th class="n">引用词条</th>
+                            <th>在当前项目中</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var g in _globalTerms)
+                        {
+                            var overridden = IsOverridden(g);
+                            <tr class="@(overridden ? "dim" : "")">
+                                <td data-label="源术语"><strong>@g.SourceTerm</strong></td>
+                                <td data-label="策略"><span class="pill sm">@(g.DoNotTranslate ? "禁止翻译" : "统一译法")</span></td>
+                                @foreach (var c in ScopeCultures)
+                                {
+                                    <td lang="@c" data-label="@($"{UiText.Locale(c)} 标准译法")">@RenderTarget(g, c)</td>
+                                }
+                                <td class="n num" data-label="引用词条">@RefCount(g)</td>
+                                <td data-label="在当前项目中">
+                                    @if (overridden)
+                                    {
+                                        <span class="pill sm">已被项目术语覆盖</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="pill pos sm">生效中</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+}
+
+@if (_hits.Count > 0)
+{
+    <section class="block" aria-labelledby="hits-title">
+        <div class="panel-head">
+            <h2 id="hits-title">术语命中的词条</h2>
+            <span class="meta"><span class="num">@_hits.Count</span> 条词条的源文案命中术语，匹配逻辑与规则检查一致</span>
+        </div>
+        <div class="table-wrap">
+            <table class="tbl stack-sm">
+                <thead>
+                    <tr>
+                        <th>词条</th>
+                        @if (ScopeProject is null)
+                        {
+                            <th>所属项目</th>
+                        }
+                        <th>源文案</th>
+                        <th>命中术语</th>
+                        <th>译文遵循情况</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var hit in _hits.Take(MaxHitRows))
+                    {
+                        <tr @key="hit.Entry.Id">
+                            <td class="id" data-label="词条"><span class="ns">@hit.Entry.NamespaceCode.</span>@hit.Entry.Key</td>
+                            @if (ScopeProject is null)
+                            {
+                                <td class="id" data-label="所属项目">@hit.Origin</td>
+                            }
+                            <td data-label="源文案">@hit.Entry.SourceText</td>
+                            <td data-label="命中术语">
+                                @foreach (var t in hit.Terms)
+                                {
+                                    <span class="pill sm term-chip">@t.SourceTerm</span>
+                                }
+                            </td>
+                            <td data-label="译文遵循情况">
+                                @if (hit.ViolatedCultures.Count == 0)
+                                {
+                                    <span class="muted">已遵循</span>
+                                }
+                                else
+                                {
+                                    @foreach (var culture in hit.ViolatedCultures)
+                                    {
+                                        <span class="pill neg sm term-chip">@culture 未遵循</span>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (_hits.Count > MaxHitRows)
+        {
+            <p class="hint">另有 @(_hits.Count - MaxHitRows) 条命中词条未展示；完整结果可在「词条矩阵」运行检查后于检查报告查看。</p>
+        }
+    </section>
+}
+}
+

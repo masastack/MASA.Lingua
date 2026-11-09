@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!--
+      被 Server(net10) 与 SDK(net8/net10) 共用的唯一领域层，因此必须双目标。
+      硬约束：本程序集只能用 net8 可用的 API，net10 专属能力只能落到 Server / Storage / AI。
+    -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>MASA.Lingua lightweight i18n core domain, bundle compiler, JSON converter, and deterministic validation engine.</Description>
+  </PropertyGroup>
+
+</Project>

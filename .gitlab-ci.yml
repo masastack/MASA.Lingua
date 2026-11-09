@@ -1,0 +1,52 @@
+include:
+  - project: "cicd/back-cicd"
+    ref: "main"
+    file:
+      - "/masastack-argocd-templates.yml"
+
+
+.pub-lingua-service:
+  variables:
+    REGISTRY_WAREHOUSE: masa
+    IMAGE_NAME_HEAD: $CI_ALI_REGISTRY_DOMAIN/$REGISTRY_WAREHOUSE/$PROJECT_NAME
+    PROJECT_NAME: lingua-service
+    PROJECT_PATH: src/MASA.Lingua.Server/**/*
+    DOCKER_FILE_PATH: src/MASA.Lingua.Server/Dockerfile
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      changes:
+        - $PROJECT_PATH
+
+build:lingua-service:
+  extends:
+    - .docker-build
+    - .pub-lingua-service
+
+push-sec:lingua-service:
+  extends:
+    - .push-sec
+    - .pub-lingua-service
+
+push-prd:lingua-service:
+  extends:
+    - .push-prd
+    - .pub-lingua-service
+
+
+build:nuget:
+  variables:
+    NUGET_API_KEY: "lonsid"
+  stage: build
+  tags:
+    - k3s
+  retry: 2
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  before_script:
+    - echo $CI_COMMIT_TAG
+  script:
+    - bash ./build/pack.sh $CI_COMMIT_TAG push
+  after_script:
+    - ls ./artifacts
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^[0-9]+\.[0-9]+\.[0-9]+$/'
+

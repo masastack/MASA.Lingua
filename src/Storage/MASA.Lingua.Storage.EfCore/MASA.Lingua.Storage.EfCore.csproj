@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>EF Core persistence provider for MASA.Lingua targeting PostgreSQL.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
+    <!-- EF Core 各包必须同版本：Npgsql 提供程序只传递 Relational >= 10.0.4，不显式固定会出现 EFCore 10.0.14 + Relational 10.0.4 的混装（MSB3277） -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
+    <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\MASA.Lingua.Core\MASA.Lingua.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- 内置示例项目的原始词条：作为嵌入资源随程序集分发，播种时按原样交给导入路径 -->
+    <None Remove="Seed\**\*.json" />
+    <EmbeddedResource Include="Seed\**\*.json" />
+  </ItemGroup>
+</Project>

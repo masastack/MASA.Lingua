@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 双目标：业务项目无论 net8 还是 net10 都能引用，按自身 TFM 自动选资产。 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>Lightweight client abstractions for MASA.Lingua SDK packages (ASP.NET Core, Blazor Server, Blazor Wasm).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\MASA.Lingua.Core\MASA.Lingua.Core.csproj" />
+  </ItemGroup>
+</Project>

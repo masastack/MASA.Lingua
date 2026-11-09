@@ -1,0 +1,463 @@
+@* 词条矩阵的一行。纯展示组件：所有显示内容都来自参数，不读页面状态。
+   抽成组件的目的是 ShouldRender：页面上任何一次重渲染（切页签、忙碌状态、改别的词条……）都会把这一页上百行
+   全部重建渲染树再 diff；这里只有「这一行用到的输入」变了才重渲染，其余行直接跳过。
+
+   单元格编辑语义：输入只写进行内草稿（不落库、不重渲染），失焦后出现「保存 / 撤销」，Enter 保存、Esc 撤销。
+   以前是失焦即落库：改一个字、点别处、译文就进了库且没有提示，误操作只能靠再改一遍来补救。 *@
+@implements IDisposable
+<tr>
+    <td class="key" data-label="词条">
+        <span class="mono">
+            @if (!string.IsNullOrEmpty(Entry.NamespaceCode))
+            {
+                <span class="ns">@Entry.NamespaceCode.</span>
+            }
+            @Entry.Key
+        </span>
+        @if (!IsSharedScope && Impact is { InheritingProjects: > 0 } impact)
+        {
+            <span class="pill sm tag" title="修改共享词条会影响所有继承它的项目@(impact.OverridingProjects > 0 ? "；已覆盖的项目：" + string.Join("、", impact.OverridingProjectCodes) : "")">
+                共享 · @(impact.InheritingProjects) 个项目继承@(impact.OverridingProjects > 0 ? $"、{impact.OverridingProjects} 个已覆盖" : "")
+            </span>
+        }
+        else if (IsSharedScope && Impact is { InheritingProjects: > 0 } sharedImpact)
+        {
+            <span class="pill sm warn tag" title="@(sharedImpact.OverridingProjects > 0 ? "已覆盖的项目不受影响：" + string.Join("、", sharedImpact.OverridingProjectCodes) : "所有继承项目都会使用修改后的译文")">
+                被 @(sharedImpact.InheritingProjects) 个项目继承、@(sharedImpact.OverridingProjects) 个项目已覆盖
+            </span>
+        }
+        @if (Entry.IsAutoReported)
+        {
+            <span class="pill warn sm tag" title="由业务端运行时发现缺失后自动上报创建">自动上报</span>
+        }
+        <div class="ctx-inline">
+            <input class="cell-input ctx-input"
+                   value="@Entry.Context"
+                   placeholder="上下文与约束（选填）"
+                   title="供 AI 翻译与规则校验参考，如按钮位置、语气限制、占位符含义"
+                   aria-label="@($"{EntryMatrix.DisplayKey(Entry)} · 上下文与约束")"
+                   @onchange="@(e => OnContextEdited.InvokeAsync(e.Value?.ToString()))" />
+            @if (Entry.MaxLength.HasValue)
+            {
+                <span class="pill sm">长度 ≤ @Entry.MaxLength</span>
+            }
+        </div>
+    </td>
+    @for (var i = 0; i < Cultures.Count; i++)
+    {
+        var culture = Cultures[i];
+        var tr = EntryTranslations.Find(Entry, culture);
+        var currentText = EntryTranslations.Text(Entry, culture, DefaultCulture);
+        var missing = string.IsNullOrWhiteSpace(currentText);
+        // 校验备注由页面按 (词条, 语种) 从校验时建好的查表取出后传入，这里不重跑校验器
+        var notes = i < Notes.Count ? Notes[i] : [];
+        var needsReview = tr?.Status is TranslationStatus.NeedsReview;
+        var stale = tr is not null && !EntryTranslations.IsSource(culture, DefaultCulture) && tr.IsStaleFor(Entry);
+        var dirty = _drafts.ContainsKey(culture);
+        // 有草稿时输入框显示草稿：本行一旦因为别的参数变化（如页面进入忙碌态）重渲染，
+        // 若仍绑库里的文本，用户正在敲的内容会被覆盖掉（Blazor 会把 value 重新设回旧值）。
+        var displayText = _drafts.TryGetValue(culture, out var draft) ? draft : currentText;
+        // 保存这一格会不会顶掉人工审核过的内容：只做提示，不再弹二次确认（编辑本身就是明确意图）
+        var overwritingApproved = tr?.Status is TranslationStatus.Approved && !string.IsNullOrWhiteSpace(currentText);
+        <td lang="@culture" data-label="@($"{UiText.Locale(culture)} · {culture}")">
+            <div class="cell @(missing ? "is-missing" : "") @(dirty ? "is-dirty" : "")" data-status="@EntryMatrix.StatusKey(tr, missing)">
+                @* @key 用「语种 + 版本号」：撤销 / 放弃时要真正把 DOM 里的输入值换回库里的文本，
+                   只改 value 属性对已经被用户改写过的 input 不生效，换 key 让 Blazor 重建这个元素 *@
+                <input @key="CellKey(culture)" class="cell-input"
+                       value="@displayText"
+                       placeholder="@(missing ? "未翻译" : null)"
+                       aria-label="@($"{EntryMatrix.DisplayKey(Entry)} · {culture}")"
+                       @oninput="@(e => OnCellInput(culture, e.Value?.ToString()))"
+                       @onchange="@(e => OnCellBlurred(culture, e.Value?.ToString()))"
+                       @onkeydown="@(e => OnCellKeyDownAsync(culture, e))" />
+                @if (dirty)
+                {
+                    <div class="cell-actions" role="group" aria-label="@($"{culture} 未保存的修改")">
+                        <span class="hint">未保存</span>
+                        <button class="btn sm primary" type="button" disabled="@Busy" @onclick="() => SaveCellAsync(culture)">保存</button>
+                        <button class="btn sm" type="button" disabled="@Busy" @onclick="() => RevertCell(culture)">撤销</button>
+                        @if (overwritingApproved)
+                        {
+                            <span class="hint warn-text" title="保存后这格译文会重新标记为已审核，原来的人工审核内容被替换">将覆盖已审核译文</span>
+                        }
+                    </div>
+                }
+                @if (needsReview || stale || notes.Count > 0)
+                {
+                    <div class="cell-notes">
+                        @if (needsReview)
+                        {
+                            <span class="pill warn sm" title="@ReviewHint(tr?.ReviewComment)">待复核</span>
+                        }
+                        @if (stale)
+                        {
+                            <span class="pill warn sm" title="这条译文是基于旧的源文案翻译的，重新确认或修改后会清除该标记">源文案已变更</span>
+                        }
+                        @if (needsReview || stale)
+                        {
+                            <button class="confirm-btn" type="button"
+                                    disabled="@Busy"
+                                    title="确认无误：保留现译文，恢复为已审核并清除标记；需修改则直接编辑单元格"
+                                    @onclick="() => OnTranslationEdited.InvokeAsync(new CellEdit(culture, currentText))">
+                                确认
+                            </button>
+                        }
+                        @foreach (var note in notes)
+                        {
+                            <span class="issue @(note.Severity == IssueSeverity.Error ? "error" : "")" title="@note.RuleCode">@note.Message</span>
+                        }
+                    </div>
+                }
+            </div>
+        </td>
+    }
+    <td class="act ai-col" data-label="AI 翻译">
+        @if (TargetCultures.Count > 0)
+        {
+            var pendingCultures = EntryMatrix.PendingAiCultures(Entry, TargetCultures);
+            var approvedCultures = EntryMatrix.ApprovedCultures(Entry, TargetCultures);
+            var busyLabel = Ai switch
+            {
+                AiState.Filling => "AI 补全中…",
+                AiState.Retranslating => "AI 重新翻译中…",
+                _ => null
+            };
+            if (busyLabel is not null)
+            {
+                <span class="ai-busy" role="status">
+                    <span class="ai-spinner" aria-hidden="true"></span>@busyLabel
+                </span>
+            }
+            else
+            {
+                <div class="ai-actions">
+                    <button class="btn sm" type="button"
+                            disabled="@(Busy || pendingCultures.Count == 0)"
+                            title="@(pendingCultures.Count == 0 ? "这条词条各语种译文都已就绪，没有缺失、草稿或待复核的内容" : "只翻译缺失、草稿与待复核的语种；已审核与 AI 已通过的译文不会被覆盖")"
+                            @onclick="() => OnRequestAi.InvokeAsync(false)">
+                        补全缺失 · @pendingCultures.Count 项
+                    </button>
+                    @* 有已审核译文时按钮转危险色：点之前就能看出这一下会弹确认，具体覆盖哪些语种看悬停提示 *@
+                    <button class="btn sm @(approvedCultures.Count > 0 ? "danger" : "")" type="button"
+                            disabled="@Busy"
+                            title="@EntryMatrix.OverwriteTitle(approvedCultures)"
+                            @onclick="() => OnRequestAi.InvokeAsync(true)">
+                        重新翻译全部 · @TargetCultures.Count 个语种
+                    </button>
+                </div>
+            }
+        }
+        @* 删除不依赖语种配置，固定排在 AI 按钮组下方：同为带边框的等宽按钮，仅文字用危险红区分层级 *@
+        <div class="del-row">
+            <button class="btn sm danger" type="button"
+                    disabled="@(Busy || AnyAiBusy)"
+                    title="删除这条词条及其全部语种的译文"
+                    @onclick="() => OnRequestDelete.InvokeAsync()">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4.2 4.5l.6 9h6.4l.6-9M6.8 7v4.5M9.2 7v4.5" /></svg>
+                删除词条
+            </button>
+        </div>
+    </td>
+</tr>
+
+@code {
+    /// <summary>单元格编辑：语种 + 新文本。</summary>
+    public readonly record struct CellEdit(string Culture, string Value);
+
+    /// <summary>「待复核」标签的悬停说明：先说降级原因，再指路确认 / 修改的操作方式。</summary>
+    private static string ReviewHint(string? comment) =>
+        string.IsNullOrWhiteSpace(comment)
+            ? "确认无误点「确认」保留现译文并恢复为已审核；需修改则直接编辑单元格"
+            : $"{comment}。确认无误点「确认」保留现译文并恢复为已审核；需修改则直接编辑单元格";
+
+    /// <summary>这一行的 AI 状态：空闲 / 正在补全 / 正在重新翻译（决定 AI 列显示按钮还是进度）。</summary>
+    public enum AiState
+    {
+        Idle,
+        Filling,
+        Retranslating
+    }
+
+    // 词条实例在页面里是「不可变快照」（任何改动都换一个新实例），所以引用相等就代表词条内容没变。
+    [Parameter, EditorRequired] public TranslationEntry Entry { get; set; } = null!;
+
+    /// <summary>全部语种（矩阵的列），与 <see cref="Notes"/> 一一对应。</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<string> Cultures { get; set; } = [];
+
+    /// <summary>需要翻译的目标语种（项目语种去掉源语种）。</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<string> TargetCultures { get; set; } = [];
+
+    [Parameter, EditorRequired] public string DefaultCulture { get; set; } = "";
+
+    /// <summary>每个语种单元格的校验备注，下标与 <see cref="Cultures"/> 对齐。</summary>
+    [Parameter, EditorRequired] public IReadOnlyList<IReadOnlyList<ValidationIssue>> Notes { get; set; } = [];
+
+    [Parameter] public bool IsSharedScope { get; set; }
+
+    /// <summary>共享词条的影响面（非共享词条为 null）。</summary>
+    [Parameter] public SharedEntryImpact? Impact { get; set; }
+
+    /// <summary>页面忙碌（保存 / AI / 删除进行中）：禁用 AI 与删除按钮。</summary>
+    [Parameter] public bool Busy { get; set; }
+
+    [Parameter] public AiState Ai { get; set; }
+
+    /// <summary>页面上任意一行正在做 AI 翻译（此时禁止删除）。</summary>
+    [Parameter] public bool AnyAiBusy { get; set; }
+
+    /// <summary>页面的「放弃全部」计数：变了就丢弃本行所有草稿并把输入框复位。</summary>
+    [Parameter] public int DiscardToken { get; set; }
+
+    /// <summary>本行「有没有未保存改动」变化时通知页面（只在翻转时回调，不受键击影响）。</summary>
+    [Parameter] public EventCallback<bool> OnPendingChanged { get; set; }
+
+    [Parameter] public EventCallback<string?> OnContextEdited { get; set; }
+    [Parameter] public EventCallback<CellEdit> OnTranslationEdited { get; set; }
+
+    /// <summary>请求 AI 翻译；参数 = 是否重新翻译全部（覆盖）。</summary>
+    [Parameter] public EventCallback<bool> OnRequestAi { get; set; }
+
+    [Parameter] public EventCallback OnRequestDelete { get; set; }
+
+    // ------------------------------------------------------------------
+    // 单元格草稿：语种 → 用户改过但还没保存的文本。
+    // 只在这个组件的 ShouldRender 允许时才会引起渲染，键击阶段完全不动渲染树。
+    // ------------------------------------------------------------------
+
+    private readonly Dictionary<string, string> _drafts = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>语种 → 输入框版本号：撤销 / 放弃时递增，靠 @key 换掉 DOM 元素让显示值回到库里文本。</summary>
+    private readonly Dictionary<string, int> _cellVersions = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>草稿所归属的词条实例：换了实例（保存回写 / AI 写回 / 重载）就丢弃旧草稿，避免把过期文本写回去。</summary>
+    private TranslationEntry? _draftsOwner;
+
+    private bool _pendingReported;
+    private int _renderedDiscardToken;
+
+    /// <summary>
+    /// 组件被销毁（翻页 / 换项目 / 筛选把这一行拿掉）时把草稿作废并通知页面：
+    /// 否则页面上的「N 处修改未保存」会挂着一个已经不在屏幕上、也无法再保存的行。
+    /// </summary>
+    public void Dispose()
+    {
+        if (_pendingReported)
+        {
+            _pendingReported = false;
+            _ = OnPendingChanged.InvokeAsync(false);
+        }
+    }
+
+    private string CellKey(string culture) =>
+        $"{culture}#{(_cellVersions.TryGetValue(culture, out var version) ? version : 0)}";
+
+    /// <summary>键击只记录草稿：不落库、不置脏、不重渲染（渲染由本组件的 ShouldRender 拦住）。</summary>
+    private void OnCellInput(string culture, string? value)
+    {
+        var text = value ?? string.Empty;
+        if (string.Equals(text, SavedText(culture), StringComparison.Ordinal))
+        {
+            // 用户把内容改回原样：草稿作废，「未保存」条应当消失，所以这里要让界面重渲染一次
+            if (_drafts.Remove(culture))
+            {
+                _dirty = true;
+                ReportPending();
+            }
+
+            return;
+        }
+
+        _drafts[culture] = text;
+        // 键击阶段不刷新界面：保存 / 撤销 条等失焦（onchange）或 Enter 时再出现，
+        // 否则每个字符都要重建这一行的渲染树。
+    }
+
+    /// <summary>失焦：把草稿落到界面（出现「保存 / 撤销」条），但依然不写库。</summary>
+    private void OnCellBlurred(string culture, string? value)
+    {
+        OnCellInput(culture, value);
+        if (!_drafts.ContainsKey(culture))
+        {
+            return;
+        }
+
+        // 键击阶段刻意不渲染，失焦这一次要让界面显示出「未保存」条（事件结束后框架会按 _dirty 重渲染本行）
+        _dirty = true;
+        ReportPending();
+    }
+
+    private async Task OnCellKeyDownAsync(string culture, KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+        {
+            await SaveCellAsync(culture);
+        }
+        else if (e.Key == "Escape")
+        {
+            RevertCell(culture);
+        }
+    }
+
+    /// <summary>保存这一格：交给页面写库（页面负责就地替换词条与增量校验）。</summary>
+    private async Task SaveCellAsync(string culture)
+    {
+        if (Busy || !_drafts.TryGetValue(culture, out var value))
+        {
+            return;
+        }
+
+        // 先清草稿再写库：写完页面会换掉 Entry 实例，本组件的 OnParametersSet 也会清一次；
+        // 这里先清是为了「写库途中用户又改了同一格」时不会把新草稿当成已保存。
+        // 失败提示由页面负责：OnTranslationEditedAsync 捕获所有异常落到状态栏（不向上抛——
+        // 「确认」按钮也走同一个回调，抛出去会断电路），所以这里不包 try/catch 恢复草稿：
+        // 异常到不了这一层，包上就是一段永远进不去的死代码。
+        _drafts.Remove(culture);
+        ReportPending();
+        _dirty = true;
+        await OnTranslationEdited.InvokeAsync(new CellEdit(culture, value));
+    }
+
+    /// <summary>撤销这一格：丢掉草稿并换掉输入框（DOM 值回到库里的文本）。</summary>
+    private void RevertCell(string culture)
+    {
+        _drafts.Remove(culture);
+        _cellVersions[culture] = (_cellVersions.TryGetValue(culture, out var version) ? version : 0) + 1;
+        ReportPending();
+        _dirty = true;
+    }
+
+    private string SavedText(string culture) => EntryTranslations.Text(Entry, culture, DefaultCulture);
+
+    /// <summary>
+    /// 测试入口：直接驱动单元格的输入 / 失焦 / 保存三步。
+    /// 生产代码只从标记里的 <c>@oninput / @onchange / @onclick</c> 进来，这些包装只是为了在渲染器里能模拟这几条路径。
+    /// </summary>
+    internal void SimulateInput(string culture, string? value) => OnCellInput(culture, value);
+
+    internal void SimulateBlur(string culture, string? value)
+    {
+        OnCellBlurred(culture, value);
+        // 真实事件处理结束后框架会自动重渲染本组件；测试直接调方法，得自己补这一步
+        StateHasChanged();
+    }
+
+    internal Task SimulateSave(string culture) => SaveCellAsync(culture);
+
+    internal bool PendingReported => _pendingReported;
+
+    /// <summary>草稿有无变化时才通知页面，避免每次键击都回调。</summary>
+    private void ReportPending()
+    {
+        var pending = _drafts.Count > 0;
+        if (pending == _pendingReported)
+        {
+            return;
+        }
+
+        _pendingReported = pending;
+        _ = OnPendingChanged.InvokeAsync(pending);
+    }
+
+    // 上一次真正渲染到屏幕上的输入。参数变化与它不同才重渲染；回调参数不参与比较（它们只是转发到页面，随时取最新的）。
+    private bool _hasRendered;
+    private bool _dirty = true;
+    private TranslationEntry? _renderedEntry;
+    private IReadOnlyList<string>? _renderedCultures;
+    private IReadOnlyList<string>? _renderedTargets;
+    private string? _renderedDefaultCulture;
+    private IReadOnlyList<IReadOnlyList<ValidationIssue>>? _renderedNotes;
+    private bool _renderedShared;
+    private SharedEntryImpact? _renderedImpact;
+    private bool _renderedBusy;
+    private AiState _renderedAi;
+    private bool _renderedAnyAiBusy;
+
+    protected override void OnParametersSet()
+    {
+        // 词条实例换了 = 库里的内容变了（保存回写 / AI 写回 / 重载）：旧草稿已失去意义
+        if (!ReferenceEquals(_draftsOwner, Entry))
+        {
+            var hadDrafts = _drafts.Count > 0;
+            _draftsOwner = Entry;
+            if (hadDrafts)
+            {
+                _drafts.Clear();
+                _cellVersions.Clear();
+                _dirty = true;
+                // 草稿被丢弃了，页面的「N 处修改未保存」计数也要跟着清掉，否则会一直挂着一条改不掉的提示
+                _pendingReported = false;
+                _ = OnPendingChanged.InvokeAsync(false);
+            }
+        }
+
+        // 页面点了「放弃全部」：清空草稿并让每个输入框重建
+        if (DiscardToken != _renderedDiscardToken)
+        {
+            _renderedDiscardToken = DiscardToken;
+            if (_drafts.Count > 0)
+            {
+                _drafts.Clear();
+                foreach (var culture in _cellVersions.Keys.ToList())
+                {
+                    _cellVersions[culture] = _cellVersions[culture] + 1;
+                }
+
+                _dirty = true;
+            }
+
+            _pendingReported = false;
+        }
+
+        _dirty = _dirty
+                 || !_hasRendered
+                 || !ReferenceEquals(Entry, _renderedEntry)
+                 || !ReferenceEquals(Cultures, _renderedCultures)
+                 || !ReferenceEquals(TargetCultures, _renderedTargets)
+                 || !string.Equals(DefaultCulture, _renderedDefaultCulture, StringComparison.Ordinal)
+                 || !SameNotes(Notes, _renderedNotes)
+                 || IsSharedScope != _renderedShared
+                 || !ReferenceEquals(Impact, _renderedImpact)
+                 || Busy != _renderedBusy
+                 || Ai != _renderedAi
+                 || AnyAiBusy != _renderedAnyAiBusy;
+    }
+
+    protected override bool ShouldRender() => _dirty;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        _hasRendered = true;
+        _dirty = false;
+        _renderedEntry = Entry;
+        _renderedCultures = Cultures;
+        _renderedTargets = TargetCultures;
+        _renderedDefaultCulture = DefaultCulture;
+        _renderedNotes = Notes;
+        _renderedShared = IsSharedScope;
+        _renderedImpact = Impact;
+        _renderedBusy = Busy;
+        _renderedAi = Ai;
+        _renderedAnyAiBusy = AnyAiBusy;
+    }
+
+    /// <summary>备注按列表实例比较：校验结果重建时会换新列表；两边都是空列表算相同（页面对「无备注」不一定复用同一个空实例）。</summary>
+    private static bool SameNotes(
+        IReadOnlyList<IReadOnlyList<ValidationIssue>> current,
+        IReadOnlyList<IReadOnlyList<ValidationIssue>>? rendered)
+    {
+        if (rendered is null || current.Count != rendered.Count)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < current.Count; i++)
+        {
+            if (!ReferenceEquals(current[i], rendered[i]) && !(current[i].Count == 0 && rendered[i].Count == 0))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+}

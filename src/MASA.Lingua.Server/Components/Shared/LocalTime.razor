@@ -1,0 +1,43 @@
+@* 时间戳展示：服务端先按固定 +08 渲染一份兜底文本，浏览器加载后由 App.razor 的 lingua-time 脚本改写成访问者本地时区。
+   为什么不在服务端 ToLocalTime()：容器里没有 tzdata、TZ 也未必是 Asia/Shanghai，ToLocalTime() 等于原样输出 UTC，
+   于是「最近发布」会比北京时间慢 8 小时。这里把换算交给浏览器，谁看就是谁的本地时间。 *@
+@if (Value is { } value)
+{
+    <time datetime="@Iso" data-utc="@Iso" data-format="@FormatKey" title="@Iso">@FallbackText(value)</time>
+}
+else
+{
+    <span class="zero">@EmptyText</span>
+}
+
+@code {
+    [Parameter] public DateTimeOffset? Value { get; set; }
+
+    /// <summary>展示形态：<c>datetime</c>（yyyy-MM-dd HH:mm）、<c>seconds</c>（含秒）、<c>date</c>（仅日期）。</summary>
+    [Parameter] public string Format { get; set; } = "datetime";
+
+    /// <summary>值为 null 时的占位文案（如「尚未发布」「—」）。</summary>
+    [Parameter] public string EmptyText { get; set; } = "—";
+
+    /// <summary>ISO 8601 往返格式：<c>datetime</c> 属性给机器读，<c>data-utc</c> 给浏览器脚本读。</summary>
+    private string Iso => Value?.ToUniversalTime().ToString("O") ?? "";
+
+    private string FormatKey => Format switch
+    {
+        "seconds" => "seconds",
+        "date" => "date",
+        _ => "datetime"
+    };
+
+    /// <summary>没有 JS（或脚本尚未跑起来）时显示的文本：固定东八区，避免出现 UTC 造成的 8 小时偏差。</summary>
+    private string FallbackText(DateTimeOffset value)
+    {
+        var local = value.ToOffset(TimeSpan.FromHours(8));
+        return FormatKey switch
+        {
+            "seconds" => local.ToString("yyyy-MM-dd HH:mm:ss"),
+            "date" => local.ToString("yyyy-MM-dd"),
+            _ => local.ToString("yyyy-MM-dd HH:mm")
+        };
+    }
+}

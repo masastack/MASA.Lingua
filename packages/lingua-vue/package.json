@@ -1,0 +1,27 @@
+{
+  "name": "@lingua/vue",
+  "version": "1.1.0",
+  "description": "Lightweight Vue 3 i18n adapter for Lingua: fixed {culture}.json static files, ETag/304, hot update over SSE, plus the lingua-sync CLI (pull / push / check).",
+  "type": "module",
+  "main": "src/index.ts",
+  "bin": {
+    "lingua-sync": "./bin/lingua-sync.mjs"
+  },
+  "files": [
+    "src",
+    "bin",
+    "lib"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "keywords": [
+    "i18n",
+    "vue",
+    "lingua",
+    "localization"
+  ]
+}

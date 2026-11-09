@@ -1,0 +1,92 @@
+@inject Microsoft.AspNetCore.Hosting.IWebHostEnvironment Env
+
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <base href="/" />
+    <title>MASA.Lingua 多语言支持与静态 JSON 分发平台</title>
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="app.css?v=@CssVersion" />
+    <HeadOutlet @rendermode="InteractiveServerPrerenderOff" />
+</head>
+<body>
+    <Routes @rendermode="InteractiveServerPrerenderOff" />
+    @* 关闭预渲染后电路建立前页面空白：放一个纯 CSS 管理显隐的静态占位（见 app.css .boot-splash） *@
+    <div class="boot-splash" role="status"><span class="ai-spinner" aria-hidden="true"></span>正在加载…</div>
+    <script src="_framework/blazor.web.js"></script>
+    <script>
+        // 顶栏的「翻译引擎」弹层：点击外部或按 Esc 关闭
+        (function () {
+            function closeEngine(except) {
+                document.querySelectorAll('details.engine[open]').forEach(function (d) {
+                    if (d !== except) d.removeAttribute('open');
+                });
+            }
+            document.addEventListener('click', function (e) {
+                closeEngine(e.target.closest ? e.target.closest('details.engine') : null);
+            });
+            document.addEventListener('keydown', function (e) {
+                if (e.key === 'Escape') closeEngine(null);
+            });
+        })();
+
+        // 时间戳本地化：服务端按固定东八区渲染兜底文本，这里改写成访问者浏览器所在时区。
+        // 用 MutationObserver 而不是逐组件 IJSRuntime 调用：词条矩阵一次渲染上百行，
+        // 每行一次 interop 会把电路消息量放大一个数量级。
+        (function () {
+            var FORMATS = {
+                datetime: { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false },
+                seconds: { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false },
+            };
+
+            function localize(el) {
+                var raw = el.getAttribute('data-utc');
+                if (!raw) return;
+                var date = new Date(raw);
+                if (isNaN(date.getTime())) return;
+                var kind = el.getAttribute('data-format') || 'datetime';
+                var text;
+                if (kind === 'date') {
+                    text = date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+                } else {
+                    var parts = new Intl.DateTimeFormat(undefined, FORMATS[kind] || FORMATS.datetime).formatToParts(date);
+                    var pick = {};
+                    parts.forEach(function (p) { pick[p.type] = p.value; });
+                    text = pick.year + '-' + pick.month + '-' + pick.day + ' ' + pick.hour + ':' + pick.minute
+                        + (kind === 'seconds' ? ':' + pick.second : '');
+                }
+                // 只改文本、不动属性：MutationObserver 只监听 childList 之外的属性也不需要再触发一次
+                if (el.textContent !== text) el.textContent = text;
+            }
+
+            function pad(n) { return n < 10 ? '0' + n : '' + n; }
+
+            function run() {
+                document.querySelectorAll('time[data-utc]').forEach(localize);
+            }
+
+            run();
+            new MutationObserver(run).observe(document.body, { childList: true, subtree: true });
+        })();
+    </script>
+</body>
+</html>
+
+@code {
+    /// <summary>
+    /// app.css 没有指纹文件名，用文件的最后修改时间当查询串：
+    /// 改完样式刷新即可生效，不需要手工维护版本号，也不会让浏览器继续吃旧样式。
+    /// </summary>
+    private string CssVersion => Env.WebRootFileProvider.GetFileInfo("app.css").LastModified.ToUnixTimeSeconds().ToString();
+
+    /// <summary>
+    /// 内部管理后台，无 SEO / 首屏静态化需求：关闭预渲染，
+    /// 避免 OnInitializedAsync 在预渲染与交互电路各完整执行一遍（数据加载 ×2、TTFB 被数据链阻塞）。
+    /// </summary>
+    private static readonly InteractiveServerRenderMode InteractiveServerPrerenderOff = new(prerender: false);
+}

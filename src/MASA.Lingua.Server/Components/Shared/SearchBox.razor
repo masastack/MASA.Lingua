@@ -1,0 +1,81 @@
+@implements IDisposable
+
+<input class="@Class" type="search" aria-label="@AriaLabel" placeholder="@Placeholder"
+       value="@Value" @oninput="OnInput" />
+
+@code {
+    /// <summary>
+    /// 防抖搜索框：键击只在本组件内处理（只重渲染这一个 input），停顿 <see cref="DebounceMs"/> 后才通过
+    /// <see cref="ValueChanged"/> 通知父页面——父页面（词条矩阵一页上百行的大表）不会在每个键击上重渲染。
+    /// 若把 <c>@oninput</c> 直接写在父页面上，Blazor 会在事件处理开始和结束各重渲染一次整页，防抖也挡不住。
+    /// </summary>
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public EventCallback<string> ValueChanged { get; set; }
+    [Parameter] public string? Class { get; set; } = "input search";
+    [Parameter] public string? AriaLabel { get; set; }
+    [Parameter] public string? Placeholder { get; set; }
+    [Parameter] public int DebounceMs { get; set; } = 250;
+
+    private CancellationTokenSource? _debounce;
+    private string? _lastParameterValue;
+    private string? _lastEmitted;
+
+    private void OnInput(ChangeEventArgs e)
+    {
+        var text = e.Value?.ToString() ?? "";
+        CancelPending();
+        var cts = _debounce = new CancellationTokenSource();
+        _ = ApplyAfterDelayAsync(text, cts.Token);
+    }
+
+    private async Task ApplyAfterDelayAsync(string text, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(DebounceMs, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // 又有新的键击：由它重新计时
+        }
+
+        // 回到渲染线程再通知父页面（父页面的回调会改状态并重渲染）
+        try
+        {
+            await InvokeAsync(() =>
+            {
+                _lastEmitted = text;
+                return ValueChanged.InvokeAsync(text);
+            });
+        }
+        catch (ObjectDisposedException)
+        {
+            // 电路已断开：没有页面可通知
+        }
+    }
+
+    /// <summary>
+    /// 父页面主动改了关键词（如从检查报告定位到词条）：作废尚未生效的键击，避免旧输入随后覆盖新的筛选。
+    /// 父页面重渲染但关键词没变、或只是把我们刚通知出去的值回传回来，都不算「主动改」，不能丢掉用户接着敲的字。
+    /// </summary>
+    protected override void OnParametersSet()
+    {
+        if (_lastParameterValue is not null
+            && !string.Equals(_lastParameterValue, Value, StringComparison.Ordinal)
+            && !string.Equals(Value, _lastEmitted, StringComparison.Ordinal))
+        {
+            CancelPending();
+        }
+
+        _lastParameterValue = Value;
+    }
+
+    private void CancelPending()
+    {
+        _debounce?.Cancel();
+        _debounce?.Dispose();
+        _debounce = null;
+    }
+
+    public void Dispose() => CancelPending();
+}

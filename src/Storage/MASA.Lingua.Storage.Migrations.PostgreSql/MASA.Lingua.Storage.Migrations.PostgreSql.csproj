@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Description>EF Core migrations for MASA.Lingua targeting PostgreSQL. Generate with: dotnet ef migrations add Name --project src/Storage/MASA.Lingua.Storage.Migrations.PostgreSql</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MASA.Lingua.Storage.EfCore\MASA.Lingua.Storage.EfCore.csproj" />
+  </ItemGroup>
+</Project>

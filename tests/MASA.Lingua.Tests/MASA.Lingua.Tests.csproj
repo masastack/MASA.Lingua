@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.14" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
+    <PackageReference Include="Testcontainers.PostgreSql" Version="4.16.0" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MASA.Lingua.Core\MASA.Lingua.Core.csproj" />
+    <ProjectReference Include="..\..\src\Storage\MASA.Lingua.Storage.EfCore\MASA.Lingua.Storage.EfCore.csproj" />
+    <ProjectReference Include="..\..\src\MASA.Lingua.AI\MASA.Lingua.AI.csproj" />
+    <ProjectReference Include="..\..\src\MASA.Lingua.Server\MASA.Lingua.Server.csproj" />
+    <ProjectReference Include="..\..\src\SDK\MASA.Lingua.SDK.Abstractions\MASA.Lingua.SDK.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\SDK\MASA.Lingua.SDK.AspNetCore\MASA.Lingua.SDK.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\SDK\MASA.Lingua.SDK.MasaI18n\MASA.Lingua.SDK.MasaI18n.csproj" />
+    <ProjectReference Include="..\..\src\Storage\MASA.Lingua.Storage.Migrations.PostgreSql\MASA.Lingua.Storage.Migrations.PostgreSql.csproj" />
+    <ProjectReference Include="..\..\src\SDK\MASA.Lingua.SDK.Maui\MASA.Lingua.SDK.Maui.csproj" />
+  </ItemGroup>
+</Project>

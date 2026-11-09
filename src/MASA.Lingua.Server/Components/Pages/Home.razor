@@ -1,0 +1,536 @@
+@page "/"
+@inherits MASA.Lingua.Server.Components.Pages.LinguaPageBase
+@inject ILinguaRepository Repository
+@inject MASA.Lingua.Server.Services.EntryAiTranslator AiTranslator
+@inject DeterministicTranslationValidator Validator
+@inject StaticBundlePublisher Publisher
+@inject WorkspaceScope Scope
+@inject ToastService Toasts
+@inject Microsoft.Extensions.Logging.ILogger<Home> Logger
+@inject IJSRuntime JS
+
+<PageTitle>词条矩阵 · MASA.Lingua</PageTitle>
+
+@{
+    var rows = FilteredEntries;
+    // 分页只影响矩阵展示：词条总数统计、检查报告、AI 批量补全仍作用于整个筛选范围
+    var totalPages = Math.Max(1, (int)Math.Ceiling(rows.Count / (double)_pageSize));
+    var pageIndex = Math.Min(_pageIndex, totalPages - 1);
+    var pageRows = rows.Skip(pageIndex * _pageSize).Take(_pageSize).ToList();
+
+    // 检查报告分页：与矩阵共用每页条数，页序号独立
+    var reportTotalPages = Math.Max(1, (int)Math.Ceiling(_validationIssues.Count / (double)_pageSize));
+    var reportPageIndex = Math.Min(_reportPageIndex, reportTotalPages - 1);
+    var reportRows = _validationIssues.Skip(reportPageIndex * _pageSize).Take(_pageSize).ToList();
+}
+
+<div class="page-head">
+    <div>
+        <h1>词条矩阵</h1>
+        <p class="lede">@Lede</p>
+    </div>
+    <div class="page-actions">
+        @if (!IsSharedScope && _blockingCount > 0)
+        {
+            <span class="pill neg"
+                  title="Error 级规则（占位符 / 长度 / HTML）与术语库违规；已进入发布的这类译文会被发布门禁拦截（按项目发布策略）">
+                阻断问题 @_blockingCount
+            </span>
+        }
+        <button class="btn" type="button" @onclick="OnRunCheckClickedAsync"
+                title="按规则与术语库重新检查当前范围内的全部译文">
+            运行检查
+        </button>
+        <button class="btn" type="button" @onclick="RunAiBatchTranslateAsync" disabled="@_isBusy"
+                title="只处理缺失、草稿与待复核的译文；已审核与 AI 已通过的译文不会被覆盖">
+            @(_isBusy ? "AI 处理中…" : "AI 批量补全")
+        </button>
+        @if (!IsSharedScope)
+        {
+            @* 项目级配置不常用，但改的是「这个页面怎么工作」的前提：放在页头，和页面标题同一层级，
+               不再塞进语种完成度面板的标题行里跟列表标题抢位置。
+               样式与「运行检查」「AI 批量补全」同为带边框的次级按钮：它们都是打开面板/执行动作，
+               用无边框的 ghost 会让这一组看起来像两套东西。 *@
+            <button class="btn" type="button" aria-haspopup="dialog"
+                    title="维护项目支持的语种与默认语种（改完立即生效）"
+                    @onclick="OpenCultureDrawer">
+                语种设置
+            </button>
+            <button class="btn" type="button" aria-haspopup="dialog"
+                    title="查看 / 重置缺词上报的项目写密钥（X-Lingua-Key）"
+                    @onclick="OpenWriteKeyDrawer">
+                接入密钥
+            </button>
+            @* 发布固定排在最后：它是这一组里唯一的写线上动作（实心主按钮），
+               夹在两个设置入口中间时，视觉上像是同一层级的三件事，
+               也容易在点「语种设置」时误点到它。 *@
+            <button class="btn primary" type="button" @onclick="PublishCurrentProjectAsync" disabled="@_isBusy"
+                    title="生成 App_Data/i18n/{项目}/{语种}.json（只经 /i18n 分发端点对外，不直出静态目录），并通过 SSE 通知业务端重新同步">
+                发布
+            </button>
+        }
+    </div>
+</div>
+
+@if (!string.IsNullOrEmpty(_statusMessage))
+{
+    <div class="notice @(_statusIsError ? "neg" : "")" role="status">
+        <span>@_statusMessage</span>
+        <button class="x" type="button" aria-label="关闭提示" @onclick="() => _statusMessage = null">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+        </button>
+    </div>
+}
+
+@if (_isLoading)
+{
+    <div class="empty roomy" role="status">正在加载当前项目的词条数据…</div>
+}
+else
+{
+<section class="panel" aria-labelledby="coverage-title">
+    <div class="panel-head">
+        <h2 id="coverage-title">语种完成度</h2>
+        @if (_entryCount > 0)
+        {
+            <ul class="legend" aria-label="图例">
+                @foreach (var item in LegendItems)
+                {
+                    <li><span class="swatch @item.Css"></span>@item.Label <b class="num">@item.Count</b></li>
+                }
+            </ul>
+        }
+    </div>
+
+    @if (_entryCount == 0)
+    {
+        <div class="empty">@ScopeName 下还没有词条。</div>
+    }
+    else
+    {
+        <div class="locales">
+            @foreach (var c in _coverage)
+            {
+                <div class="locale">
+                    <div class="locale-name">
+                        <strong lang="@c.Culture">@UiText.Locale(c.Culture)</strong>
+                        <span class="mono">@c.Culture</span>
+                        @if (IsSourceCulture(c.Culture))
+                        {
+                            <span class="src">源语言</span>
+                        }
+                        @if (GlossaryOf(c.Culture) is { Percent: { } pct } g)
+                        {
+                            <span class="pill sm @(pct >= 100 ? "pos" : pct >= 80 ? "warn" : "neg")"
+                                  title="术语遵循率：@g.Followed / @g.Checked（源文案命中的术语中，译文遵循标准译法或可接受变体且未使用禁用译法的比例）">
+                                术语 @(pct)%
+                            </span>
+                        }
+                    </div>
+                    <div class="stack" role="img" aria-label="@CoverageSummary(c)">
+                        @if (c.Approved > 0) { <span class="approved" style="flex: @c.Approved" title="已审核 @c.Approved"></span> }
+                        @if (c.Ai > 0) { <span class="ai" style="flex: @c.Ai" title="AI 已译 @c.Ai"></span> }
+                        @if (c.Review > 0) { <span class="review" style="flex: @c.Review" title="待复核 @c.Review"></span> }
+                        @if (c.Missing > 0) { <span class="missing" style="flex: @c.Missing" title="缺失 @c.Missing"></span> }
+                    </div>
+                    <div class="locale-count num">@(c.Approved + c.Ai) <small>/ @c.Total</small></div>
+                    @if (!IsSharedScope)
+                    {
+                        <a class="locale-file mono" href="/i18n/@SelectedProjectCode/@(c.Culture).json" target="_blank" rel="noopener">@(c.Culture).json</a>
+                    }
+                </div>
+            }
+        </div>
+    }
+
+    @if (IsSharedScope)
+    {
+        <div class="panel-foot"><span>共享命名空间随各项目一起发布，不单独生成文件。</span></div>
+    }
+    else if (CurrentProject is { } proj)
+    {
+        <div class="panel-foot">
+            <span>最近发布 <strong class="num"><LocalTime Value="@proj.LastPublishedAt" EmptyText="尚未发布" /></strong></span>
+            @if (!string.IsNullOrEmpty(proj.LastPublishedVersionHash))
+            {
+                @* 指纹是核对线上产物与草稿是否一致时唯一能逐字符比对的凭据：不截断，整串可选中、可复制 *@
+                <span class="hash-row">
+                    版本指纹
+                    <code class="mono hash" title="@proj.LastPublishedVersionHash">@proj.LastPublishedVersionHash</code>
+                    <button class="link-btn" type="button" title="复制完整版本指纹" @onclick="CopyVersionHashAsync">复制</button>
+                </span>
+            }
+            <span><span class="num">@_entryCount</span> 条词条 · @ActiveCultures.Count 个语种</span>
+        </div>
+    }
+</section>
+
+<section class="block" aria-label="词条与检查">
+    <div class="tabs" role="tablist" aria-label="词条视图">
+        <button class="tab" type="button" role="tab" aria-selected="@(_view == MatrixView.Entries ? "true" : "false")"
+                @onclick="() => _view = MatrixView.Entries">
+            词条<span class="n num">@rows.Count</span>
+        </button>
+        <button class="tab" type="button" role="tab" aria-selected="@(_view == MatrixView.Report ? "true" : "false")"
+                @onclick="() => _view = MatrixView.Report">
+            检查报告<span class="n num">@_validationIssues.Count</span>
+        </button>
+    </div>
+
+    @if (_view == MatrixView.Entries)
+    {
+        <div class="toolbar">
+            <select class="select" aria-label="命名空间" @bind="_selectedNamespaceCode" @bind:after="OnNamespaceChanged">
+                <option value="">全部命名空间</option>
+                <option value="__root__">（项目根）</option>
+                @foreach (var ns in CurrentNamespaces.Where(n => !string.IsNullOrEmpty(n.Code)))
+                {
+                    <option value="@ns.Code">@ns.Code@(ns.IsShared ? " · 共享" : "")</option>
+                }
+            </select>
+            @* 防抖在组件内完成：键击只重渲染输入框本身，停顿后才通知本页重新筛选（否则每个键击都整页重渲染两次） *@
+            <SearchBox Value="@_searchKeyword" ValueChanged="OnSearchChanged"
+                       AriaLabel="搜索 Key、文案、上下文"
+                       Placeholder="搜索 Key、文案或上下文，如 {days}" />
+            <div class="segmented" role="group" aria-label="状态筛选">
+                <button type="button" aria-pressed="@(!_onlyNeedsReview ? "true" : "false")" @onclick="() => SetNeedsReviewFilter(false)">全部</button>
+                <button type="button" aria-pressed="@(_onlyNeedsReview ? "true" : "false")" @onclick="() => SetNeedsReviewFilter(true)">仅待复核</button>
+            </div>
+            <span class="grow"></span>
+            @if (_dirtyRowIds.Count > 0)
+            {
+                <span class="dirty-note" role="status">
+                    @_dirtyRowIds.Count 处修改未保存 · Enter 保存
+                    <button class="link-btn" type="button" @onclick="DiscardAllEdits">放弃全部</button>
+                </span>
+            }
+            <button class="btn" type="button" aria-expanded="@(_showAdd ? "true" : "false")" @onclick="() => _showAdd = !_showAdd">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+                新增词条
+            </button>
+        </div>
+
+        @if (_showAdd)
+        {
+            <form class="panel raised form" @onsubmit="AddNewEntryAsync">
+                <div class="panel-head">
+                    <h2>新增或更新词条</h2>
+                    <span class="meta">同一命名空间下 Key 相同则更新；占位符写作 {name}</span>
+                </div>
+                <div class="add-grid">
+                    <label class="field">
+                        <span>命名空间</span>
+                        <input class="input mono" list="ns-options" @bind="_newNs" placeholder="留空 = 项目根；如 order" />
+                        <datalist id="ns-options">
+                            @foreach (var ns in CurrentNamespaces)
+                            {
+                                <option value="@ns.Code"></option>
+                            }
+                        </datalist>
+                    </label>
+                    <label class="field">
+                        <span>词条 Key</span>
+                        <input class="input mono" @bind="_newKey" placeholder="如 confirmPay" />
+                    </label>
+                    <label class="field">
+                        <span>源语言文案</span>
+                        <input class="input" @bind="_newSourceText" placeholder="如 确认支付 {amount} 元" />
+                    </label>
+                    <label class="field">
+                        <span>上下文说明</span>
+                        <input class="input" @bind="_newContext" placeholder="如 收银台底部主按钮" />
+                    </label>
+                    <label class="field">
+                        <span>最大长度</span>
+                        <input class="input num" type="number" min="1" @bind="_newMaxLength" placeholder="如 25" />
+                    </label>
+                </div>
+                <div class="form-actions">
+                    <button class="btn primary" type="submit">保存词条</button>
+                    <button class="btn" type="button" @onclick="() => _showAdd = false">收起</button>
+                </div>
+            </form>
+        }
+
+        @if (rows.Count == 0)
+        {
+            <div class="empty roomy">
+                @(string.IsNullOrWhiteSpace(_searchKeyword) && string.IsNullOrEmpty(_selectedNamespaceCode)
+                    ? "还没有词条。"
+                    : "没有符合当前筛选的词条。")
+            </div>
+        }
+        else
+        {
+            <div class="table-wrap" role="tabpanel">
+                <table class="tbl matrix stack-sm">
+                    <thead>
+                        <tr>
+                            <th>词条</th>
+                            @for (var i = 0; i < ActiveCultures.Count; i++)
+                            {
+                                var culture = ActiveCultures[i];
+                                @* 默认语种（源文案语种）永远排第一列：它是其余译文的参照，放在中间会被滚动挤出去 *@
+                                <th lang="@culture">@UiText.Locale(culture)<span class="mono">@culture</span>
+                                    @if (i == 0 && IsSourceCulture(culture))
+                                    {
+                                        <span class="pill sm lead">源</span>
+                                    }
+                                </th>
+                            }
+                            <th class="act ai-col">AI 翻译</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var entry in pageRows)
+                        {
+                            @* 每行一个组件：只有这一行用到的输入变了才重渲染（见 EntryRow），页面其他状态变化不再重建上百行 *@
+                            <EntryRow @key="entry.Id"
+                                      Entry="entry"
+                                      Cultures="ActiveCultures"
+                                      TargetCultures="TargetCultures"
+                                      DefaultCulture="@DefaultCultureOrFallback"
+                                      Notes="NotesFor(entry)"
+                                      IsSharedScope="IsSharedScope"
+                                      Impact="SharedImpactOf(entry)"
+                                      Busy="_isBusy"
+                                      Ai="AiStateOf(entry)"
+                                      AnyAiBusy="_aiBusy is not null"
+                                      DiscardToken="@_discardToken"
+                                      OnPendingChanged="@(hasPending => OnRowPendingChanged(entry, hasPending))"
+                                      OnContextEdited="@(value => OnContextEditedAsync(entry, value))"
+                                      OnTranslationEdited="@(edit => OnTranslationEditedAsync(entry, edit.Culture, edit.Value))"
+                                      OnRequestAi="@(overwrite => RequestAiTranslateAsync(entry, overwrite))"
+                                      OnRequestDelete="@(() => RequestDeleteEntry(entry))" />
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager">
+                <span class="count">共 <b class="num">@rows.Count</b> 条</span>
+                <select class="select" aria-label="每页条数" @bind="_pageSize" @bind:after="ResetPage">
+                    @foreach (var size in PageSizeOptions)
+                    {
+                        <option value="@size">每页 @size 条</option>
+                    }
+                </select>
+                <span class="grow"></span>
+                <button class="btn sm" type="button" disabled="@(pageIndex == 0)"
+                        @onclick="() => GoToPage(pageIndex - 1)">
+                    上一页
+                </button>
+                <span class="count num">第 @(pageIndex + 1) / @totalPages 页</span>
+                <button class="btn sm" type="button" disabled="@(pageIndex >= totalPages - 1)"
+                        @onclick="() => GoToPage(pageIndex + 1)">
+                    下一页
+                </button>
+            </div>
+        }
+    }
+    else
+    {
+        <div class="toolbar">
+            <span class="count">
+                @(_validationIssues.Count == 0
+                    ? "当前范围内没有发现问题。"
+                    : $"共 {_validationIssues.Count} 项，来自当前筛选范围内的 {rows.Count} 条词条。")
+            </span>
+        </div>
+
+        @if (_validationIssues.Count == 0)
+        {
+            <div class="empty roomy">规则与术语库检查全部通过。</div>
+        }
+        else
+        {
+            <div class="table-wrap" role="tabpanel">
+                <table class="tbl checks stack-sm">
+                    <thead>
+                        <tr>
+                            <th>词条</th>
+                            <th>语种</th>
+                            <th>问题</th>
+                            <th>级别</th>
+                            <th>建议值</th>
+                            <th class="act"><span class="sr-only">操作</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var issue in reportRows)
+                        {
+                            <tr>
+                                <td class="id" data-label="词条">@issue.EntryKey</td>
+                                <td data-label="语种"><span class="mono">@issue.Culture</span></td>
+                                <td data-label="问题">
+                                    <span class="rule">@UiText.Rule(issue.RuleCode)</span>
+                                    <span class="msg">@issue.Message</span>
+                                </td>
+                                <td data-label="级别">
+                                    <span class="pill sm @SeverityCss(issue.Severity)">@SeverityLabel(issue.Severity)</span>
+                                </td>
+                                <td data-label="建议值">
+                                    @if (string.IsNullOrWhiteSpace(issue.SuggestedFix))
+                                    {
+                                        <span class="zero">—</span>
+                                    }
+                                    else
+                                    {
+                                        @issue.SuggestedFix
+                                    }
+                                </td>
+                                <td class="act"><button class="link-btn" type="button" @onclick="() => LocateIssue(issue)">在矩阵中定位</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="pager">
+                <span class="count">共 <b class="num">@_validationIssues.Count</b> 项</span>
+                <span class="grow"></span>
+                <button class="btn sm" type="button" disabled="@(reportPageIndex == 0)"
+                        @onclick="() => GoToReportPage(reportPageIndex - 1)">
+                    上一页
+                </button>
+                <span class="count num">第 @(reportPageIndex + 1) / @reportTotalPages 页</span>
+                <button class="btn sm" type="button" disabled="@(reportPageIndex >= reportTotalPages - 1)"
+                        @onclick="() => GoToReportPage(reportPageIndex + 1)">
+                    下一页
+                </button>
+            </div>
+        }
+    }
+</section>
+}
+
+<ConfirmDialog Open="@(_pendingOverwrite is not null)"
+               Title="覆盖已审核的译文？"
+               Message="@OverwriteConfirmMessage"
+               ConfirmText="覆盖并重新翻译"
+               Danger="true"
+               OnConfirm="ConfirmOverwriteAsync"
+               OnCancel="CancelOverwrite" />
+
+<ConfirmDialog Open="@(_pendingDelete is not null)"
+               Title="删除词条？"
+               Message="@DeleteConfirmMessage"
+               ConfirmText="删除词条"
+               Danger="true"
+               OnConfirm="ConfirmDeleteEntryAsync"
+               OnCancel="() => _pendingDelete = null" />
+
+@* 项目级配置抽屉：放在页面末尾，与正文列表互不影响（打开时不改变矩阵布局，关闭后不留空档） *@
+<SlideOver Open="@_cultureDrawer" Title="项目语种" Intro="@CultureDrawerIntro" OnClose="CloseCultureDrawer">
+    <ChildContent>
+        @if (CurrentProject is { } cultureProject)
+        {
+            <div class="culture-panel">
+            <div class="field">
+                <span>
+                    支持的语种
+                    <span class="hint">点击 × 移除；默认语种不可移除，需先把默认语种改为其他语种。改动立即保存。</span>
+                </span>
+                <ul class="culture-chips">
+                    @foreach (var culture in cultureProject.SupportedCultures)
+                    {
+                        var isDefault = string.Equals(culture, cultureProject.DefaultCulture, StringComparison.OrdinalIgnoreCase);
+                        <li class="chip @(isDefault ? "default" : "")">
+                            <strong lang="@culture">@UiText.Locale(culture)</strong>
+                            <span class="mono">@culture</span>
+                            @if (isDefault)
+                            {
+                                <span class="badge">默认</span>
+                            }
+                            else
+                            {
+                                <button class="x" type="button" aria-label="移除 @culture" disabled="@_cultureBusy"
+                                        @onclick="() => RequestRemoveCulture(culture)">
+                                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+                                </button>
+                            }
+                        </li>
+                    }
+                </ul>
+            </div>
+
+            <label class="field">
+                <span>
+                    新增语种
+                    <span class="hint">输入中文名、英文名或代码都能搜索（如 韩语 / Korean / ko）；选中即添加，不需要再点保存</span>
+                </span>
+                @* 排除已支持的语种：搜不到重复项，也不会因为手写拼错多出一个空语种。
+                   ExtraCodes 补上默认语种（字段缓存，见 _addCultureExtraCodes 的说明）：ICU 枚举不到 zh-CN
+                   （它规范成 zh-Hans-CN），但它是本平台的源文案语种，一旦项目把它移除，不补这一项就再也选不回来。
+                   ClearAfterSelect：选完清空搜索框，方便连着加下一个。 *@
+                <CultureSelect @key="@($"add-culture-{cultureProject.SupportedCultures.Count}")"
+                               Value="@null" Placeholder="搜索语种，如 韩语 / Korean / ko"
+                               ClearAfterSelect="true"
+                               ExtraCodes="@_addCultureExtraCodes"
+                               ExcludeCodes="@(cultureProject.SupportedCultures)"
+                               ValueChanged="AddCultureAsync" AriaLabel="新增语种" />
+            </label>
+
+            <label class="field">
+                <span>
+                    默认语种
+                    <span class="hint">源文案语种，也是译文缺失时的回退语种；改它会改变「源语言」列的语义</span>
+                </span>
+                @* @key 绑当前默认语种：用户选了别的语种但取消确认时，重建元素把显示值换回实际值
+                   （浏览器已经改了 select 的选中项，只改 value 属性不会拨回去）。 *@
+                <select @key="@($"default-culture-{cultureProject.DefaultCulture}")" class="select" aria-label="默认语种"
+                        disabled="@_cultureBusy" value="@cultureProject.DefaultCulture" @onchange="OnDefaultCultureChanged">
+                    @foreach (var culture in cultureProject.SupportedCultures)
+                    {
+                        <option value="@culture">@culture · @UiText.Locale(culture)</option>
+                    }
+                </select>
+            </label>
+
+            @if (_cultureBusy)
+            {
+                <p class="hint" role="status">正在保存语种配置…</p>
+            }
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <span class="hint">新增语种后词条初始为「缺失」，可用「AI 批量补全」生成译文；重新发布后语种才会进入各端 manifest。移除语种不会删除已有译文，重新添加即可恢复。</span>
+        <button class="btn" type="button" @onclick="CloseCultureDrawer">收起</button>
+    </FooterContent>
+</SlideOver>
+
+<SlideOver Open="@_writeKeyDrawer" Title="接入密钥"
+           Intro="项目写密钥用于缺词上报鉴权（X-Lingua-Key 请求头）。仅服务端 SDK 携带；MAUI / Vue 客户端不支持上报，密钥不要下发到终端。"
+           OnClose="CloseWriteKeyDrawer">
+    <ChildContent>
+        @if (CurrentProject is { } keyProject)
+        {
+            <div class="field">
+                <span>当前密钥</span>
+                <div class="input-btn-row">
+                    <input class="input mono" readonly value="@(_revealWriteKey ? keyProject.WriteKey : "••••••••••••••••••••••••")" />
+                    <button class="btn" type="button" @onclick="RevealWriteKey">@(_revealWriteKey ? "隐藏" : "显示")</button>
+                    <button class="btn" type="button" @onclick="CopyWriteKey" disabled="@(_revealWriteKey is false || keyProject.WriteKey is null)">复制</button>
+                </div>
+            </div>
+        }
+    </ChildContent>
+    <FooterContent>
+        <span class="hint">业务项目配置 <span class="mono">Lingua:WriteKey</span> 填这里复制的密钥；重置后旧密钥立即失效，需同步更新业务配置。</span>
+        <button class="btn danger" type="button" @onclick="RegenerateWriteKeyAsync" disabled="@_isBusy">重置密钥</button>
+    </FooterContent>
+</SlideOver>
+
+<ConfirmDialog Open="@(_pendingCultureRemove is not null)"
+               Title="移除这个语种？"
+               Message="@CultureRemoveMessage"
+               ConfirmText="移除语种"
+               Danger="true"
+               OnConfirm="ConfirmRemoveCultureAsync"
+               OnCancel="() => _pendingCultureRemove = null" />
+
+<ConfirmDialog Open="@(_pendingDefaultCulture is not null)"
+               Title="更改默认语种？"
+               Message="@DefaultCultureConfirmMessage"
+               ConfirmText="更改默认语种"
+               OnConfirm="ConfirmChangeDefaultCultureAsync"
+               OnCancel="() => _pendingDefaultCulture = null" />

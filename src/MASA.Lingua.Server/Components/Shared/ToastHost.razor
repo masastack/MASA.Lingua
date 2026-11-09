@@ -1,0 +1,40 @@
+@implements IDisposable
+@inject ToastService Toasts
+
+@if (_items.Length > 0)
+{
+    <div class="toast-stack" aria-live="polite" aria-atomic="false">
+        @foreach (var toast in _items)
+        {
+            var isError = toast.Kind == ToastKind.Error;
+            <div class="toast @(isError ? "neg" : "pos")" role="@(isError ? "alert" : "status")" @key="toast.Id">
+                <span class="toast-text">@toast.Text</span>
+                @if (isError)
+                {
+                    <button class="x" type="button" aria-label="关闭提示" @onclick="() => Toasts.Dismiss(toast.Id)">
+                        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+                    </button>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private ToastMessage[] _items = [];
+
+    protected override void OnInitialized()
+    {
+        _items = [.. Toasts.Items];
+        Toasts.Changed += OnChanged;
+    }
+
+    /// <summary>提示的自动消失发生在后台线程，必须切回渲染上下文再刷新。</summary>
+    private void OnChanged() => _ = InvokeAsync(() =>
+    {
+        _items = [.. Toasts.Items];
+        StateHasChanged();
+    });
+
+    public void Dispose() => Toasts.Changed -= OnChanged;
+}

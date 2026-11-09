@@ -1,0 +1,67 @@
+@* 右侧抽屉：承载「语种设置」「接入密钥」这类低频项目配置。
+   放在页头按钮里打开，而不是在页面正文里原地展开：正文里的设置面板会把词条矩阵推下去，且和列表共享同一个滚动区。
+   交互沿用站内确认弹窗的约定：点遮罩关闭、Esc 关闭、打开后焦点落在抽屉上（读屏器随即读出标题）。 *@
+@if (Open)
+{
+    <div class="drawer-layer" @onclick="CloseAsync">
+        <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1"
+               @ref="_drawer" @onclick:stopPropagation="true" @onkeydown="OnKeyDownAsync">
+            <div class="drawer-head">
+                <div>
+                    <h2 id="@_titleId">@Title</h2>
+                    @if (!string.IsNullOrWhiteSpace(Intro))
+                    {
+                        <p class="meta">@Intro</p>
+                    }
+                </div>
+                <button class="x" type="button" aria-label="关闭" @onclick="CloseAsync">
+                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+                </button>
+            </div>
+            <div class="drawer-body">
+                @ChildContent
+            </div>
+            @if (FooterContent is not null)
+            {
+                <div class="drawer-foot">@FooterContent</div>
+            }
+        </aside>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+
+    [Parameter] public string Title { get; set; } = "";
+
+    /// <summary>标题下的说明文字（一句话解释这个面板在改什么、什么时候生效）。</summary>
+    [Parameter] public string? Intro { get; set; }
+
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    [Parameter] public RenderFragment? FooterContent { get; set; }
+
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private readonly string _titleId = $"drawer-{Guid.NewGuid():N}";
+    private ElementReference _drawer;
+    private bool _focused;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open && !_focused)
+        {
+            _focused = true;
+            await _drawer.FocusAsync();
+        }
+        else if (!Open)
+        {
+            _focused = false;
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task OnKeyDownAsync(KeyboardEventArgs e) =>
+        e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+}

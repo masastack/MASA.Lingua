@@ -1,0 +1,318 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject NavigationManager Nav
+@inject ILinguaRepository Repository
+@inject WorkspaceScope Scope
+@inject IPmProjectDirectory PmDirectory
+@inject Microsoft.Extensions.Options.IOptions<MASA.Lingua.AI.LinguaAiOptions> AiOptions
+
+<div class="app">
+    <aside class="sidebar @(_navOpen ? "open" : "")" id="app-nav" aria-label="主导航">
+        <div class="brand">
+            <a class="brand-link" href="">
+                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+                    <path d="M5 3.5h14A2.5 2.5 0 0 1 21.5 6v9a2.5 2.5 0 0 1-2.5 2.5h-6.1l-4 3.4a.7.7 0 0 1-1.15-.53V17.5H5A2.5 2.5 0 0 1 2.5 15V6A2.5 2.5 0 0 1 5 3.5Z" fill="#1b6c80" />
+                    <path d="M9 7.5v6h5.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <span class="brand-name">MASA.Lingua</span>
+            </a>
+            <button class="close" type="button" aria-label="关闭菜单" @onclick="CloseNav">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+            </button>
+        </div>
+
+        <nav aria-label="页面">
+            <div class="nav-group">词条与术语</div>
+            <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 6.5h12M6 6.5v7" /></svg>
+                词条矩阵
+            </NavLink>
+            <NavLink class="nav-item" href="glossary">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2h7.5a1.5 1.5 0 0 1 1.5 1.5V14H5a1.5 1.5 0 0 1-1.5-1.5V2Z" /><path d="M3.5 12.5A1.5 1.5 0 0 1 5 11h7.5M6.5 5.5h3.5" /></svg>
+                术语库
+            </NavLink>
+
+            <div class="nav-group">分发</div>
+            <NavLink class="nav-item" href="import-export">
+                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10V2.5M5 5.2 8 2.2l3 3M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" /></svg>
+                导入与发布
+            </NavLink>
+        </nav>
+    </aside>
+
+    <header class="topbar">
+      <div class="topbar-inner">
+        <button class="menu-btn" type="button" aria-label="打开菜单" aria-controls="app-nav"
+                aria-expanded="@(_navOpen ? "true" : "false")" @onclick="OpenNav">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>
+        </button>
+
+        <div class="scope">
+            <span>项目</span>
+            @if (_pmFailed)
+            {
+                <span class="pm-error" title="@_pmError">PM 项目清单不可用</span>
+                <button class="btn sm" type="button" @onclick="RetryProjectsAsync">重试</button>
+            }
+            else
+            {
+                <select class="select" aria-label="当前项目" value="@_projectKey" @onchange="OnProjectChanged">
+                    @foreach (var project in _projects)
+                    {
+                        <option value="@project.Identity">@project.Name</option>
+                    }
+                    <option value="@WorkspaceScope.Shared">全局共享命名空间</option>
+                </select>
+
+                @* 全局共享命名空间不属于任何 PM 项目，没有应用可选 *@
+                @if (CurrentProject is { } current)
+                {
+                    <span>应用</span>
+                    <select class="select" aria-label="当前应用" value="@Scope.ProjectCode" @onchange="OnAppChanged">
+                        @foreach (var app in current.Apps)
+                        {
+                            <option value="@app.Identity" title="@app.Identity">@app.Name</option>
+                        }
+                    </select>
+                }
+            }
+        </div>
+
+        <div class="spacer"></div>
+
+        @{
+            var ai = AiOptions.Value;
+        }
+        <details class="engine">
+            <summary>
+                <span class="dot live"></span>
+                AI 翻译 · @ai.ModelId
+            </summary>
+            <div class="engine-panel">
+                <h2>AI 翻译已启用</h2>
+                <p>
+                    模型 <code>@ai.ModelId</code>，服务 <code>@AiEndpointLabel(ai)</code>。「AI 批量补全」与词条行最右列的「补全缺失 / 重新翻译」都会调用它：
+                    按命中的术语注入提示词，违反术语库或占位符规则的译文会自动修复一次，仍不合格的标为「待复核」。
+                    调用失败会直接显示原因，不会写入任何译文。
+                </p>
+            </div>
+        </details>
+
+        <AuthorizeView>
+            <Authorized>
+                <form class="user" method="post" action="/logout">
+                    <span class="user-name" title="当前登录用户">@(context.User.Identity?.Name ?? "已登录")</span>
+                    <button type="submit" class="user-logout">退出</button>
+                </form>
+            </Authorized>
+        </AuthorizeView>
+      </div>
+    </header>
+
+    <main class="sheet">
+        <div class="page">
+            @* 与页面内容同一条栏线、同一套留白；放在 .page 内而不是白页顶边，避免被顶栏/圆角压住 *@
+            @if (_missingLocalConfig)
+            {
+                <div class="pm-init-banner" role="status">
+                    <span>
+                        应用 <code>@Scope.ProjectCode</code> 在 Lingua 尚无多语言配置。
+                    </span>
+                    <button class="btn sm primary" type="button" @onclick="CreateLocalConfigAsync" disabled="@_creating">
+                        @(_creating ? "创建中…" : "创建多语言配置")
+                    </button>
+                </div>
+            }
+            @* 项目范围（顶栏选中的应用）要等 PM 清单返回并纠正完才算确定：此前渲染页面，各页会先按默认项目加载一遍，
+               随后范围被纠正又重载一遍（白白两次整项目加载，且先出的旧数据还可能闪一下）。 *@
+            @if (_scopeReady)
+            {
+                @Body
+            }
+            else
+            {
+                <div class="empty roomy" role="status">正在加载项目清单…</div>
+            }
+        </div>
+    </main>
+
+    <ToastHost />
+</div>
+
+@code {
+    /// <summary>PM 项目及其应用（两级切换器数据源）；PM 是项目来源，本地库不再提供清单。</summary>
+    private List<PmProject> _projects = [];
+
+    /// <summary>
+    /// 项目下拉当前值：PM 项目 Identity，或 <see cref="WorkspaceScope.Shared"/>。
+    /// 单独记录而不从应用 Identity 反推——PM 里同一应用 Identity 可能同时挂在多个项目下。
+    /// </summary>
+    private string _projectKey = string.Empty;
+
+    private PmProject? CurrentProject => _projects.FirstOrDefault(p => p.Identity == _projectKey);
+
+    private bool _pmFailed;
+    private string? _pmError;
+    private bool _missingLocalConfig;
+    private bool _creating;
+    private bool _navOpen;
+
+    /// <summary>项目范围已按 PM 清单校验完成：之前不渲染页面内容（<c>@Body</c>），避免页面先按未校验的默认项目加载一遍。</summary>
+    private bool _scopeReady;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Nav.LocationChanged += OnLocationChanged;
+        Scope.Changed += OnScopeChanged;
+
+        // 本站点交互组件不做服务端预渲染（见 App.razor），这里只在电路建立时执行一次；
+        // PM 调用由目录服务的短时缓存+单飞去重，且用应用身份（client_credentials），不依赖请求/用户上下文。
+        try
+        {
+            await ReloadProjectsAsync();
+        }
+        finally
+        {
+            // 无论成败都要放行页面：PM 失败时 ReloadProjectsAsync 已进入错误态，页面照常以纠正后的范围工作
+            _scopeReady = true;
+        }
+    }
+
+    /// <summary>手动重试：绕过目录服务的短时失败缓存，真实请求一次 PM。</summary>
+    private async Task RetryProjectsAsync() => await ReloadProjectsAsync(forceRefresh: true);
+
+    private async Task ReloadProjectsAsync(bool forceRefresh = false)
+    {
+        try
+        {
+            _projects = (await PmDirectory.GetProjectsAsync(forceRefresh)).ToList();
+            _pmFailed = false;
+            _pmError = null;
+        }
+        catch (Exception ex)
+        {
+            // 严格依赖 PM：失败不回退本地清单，切换器进入错误态等待手动重试
+            _projects = [];
+            _pmFailed = true;
+            _pmError = ex.Message;
+        }
+
+        Scope.EnsureValid(_pmFailed ? [] : [.. _projects.SelectMany(p => p.Apps).Select(a => a.Identity)]);
+        SyncProjectKey();
+        await RefreshLocalStateAsync();
+    }
+
+    /// <summary>
+    /// 让项目下拉与当前选中的应用保持一致：共享命名空间 → 共享项；已选项目仍含当前应用 → 保持不动
+    /// （重复 Identity 的应用同属多个项目时，不能被反推改掉用户的选择）；否则取第一个含该应用的项目。
+    /// </summary>
+    private void SyncProjectKey()
+    {
+        if (Scope.IsShared)
+        {
+            _projectKey = WorkspaceScope.Shared;
+            return;
+        }
+
+        if (CurrentProject is { } current && current.Apps.Any(a => a.Identity == Scope.ProjectCode))
+        {
+            return;
+        }
+
+        _projectKey = _projects.FirstOrDefault(p => p.Apps.Any(a => a.Identity == Scope.ProjectCode))?.Identity
+            ?? string.Empty;
+    }
+
+    /// <summary>横幅：当前选中的应用在本地还没有多语言配置关联（Shared 伪项目除外）。
+    /// 只做存在性判断，用轻量摘要查询，不为读一个 bool 加载整个项目的词条树。</summary>
+    private async Task RefreshLocalStateAsync()
+    {
+        _missingLocalConfig = !Scope.IsShared
+            && !string.IsNullOrEmpty(Scope.ProjectCode)
+            && await Repository.GetProjectSummaryAsync(Scope.ProjectCode) is null;
+    }
+
+    /// <summary>换项目：自动落到该项目的第一个应用（应用下拉随即换成该项目的应用清单）。
+    /// 选中真正变化时，Changed 的订阅方（含本布局的 OnScopeChanged）已经会刷新本地状态，这里不再重复查一次。</summary>
+    private async Task OnProjectChanged(ChangeEventArgs e)
+    {
+        _projectKey = e.Value?.ToString() ?? string.Empty;
+
+        var changed = false;
+        if (_projectKey == WorkspaceScope.Shared)
+        {
+            changed = Scope.Select(WorkspaceScope.Shared);
+        }
+        else if (CurrentProject?.Apps.FirstOrDefault() is { } first)
+        {
+            changed = Scope.Select(first.Identity);
+        }
+
+        if (!changed)
+        {
+            await RefreshLocalStateAsync();
+        }
+    }
+
+    private async Task OnAppChanged(ChangeEventArgs e)
+    {
+        var changed = Scope.Select(e.Value?.ToString() ?? string.Empty);
+        if (!changed)
+        {
+            await RefreshLocalStateAsync();
+        }
+    }
+
+    private void OnScopeChanged() => _ = InvokeAsync(async () =>
+    {
+        // fire-and-forget 的事件回调：数据库不可用等异常在这里接住，否则会变成未观察异常静默丢失（横幅停在旧状态）
+        try
+        {
+            SyncProjectKey();
+            await RefreshLocalStateAsync();
+        }
+        catch (Exception)
+        {
+            _missingLocalConfig = false;
+        }
+
+        StateHasChanged();
+    });
+
+    private async Task CreateLocalConfigAsync()
+    {
+        _creating = true;
+        try
+        {
+            await Repository.CreateProjectAsync(Scope.ProjectCode);
+            await RefreshLocalStateAsync();
+            // 通知词条矩阵 / 术语库 / 导入发布按新配置重载
+            Scope.NotifyChanged();
+        }
+        finally
+        {
+            _creating = false;
+        }
+        StateHasChanged();
+    }
+
+    private void OpenNav() => _navOpen = true;
+
+    private void CloseNav() => _navOpen = false;
+
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
+    {
+        _navOpen = false;
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    /// <summary>只展示服务地址（主机:端口），避免把完整 URL 里可能带的路径或凭据露在界面上。</summary>
+    private static string AiEndpointLabel(MASA.Lingua.AI.LinguaAiOptions ai) =>
+        Uri.TryCreate(ai.Endpoint, UriKind.Absolute, out var uri) ? uri.Authority : ai.Endpoint;
+
+    public void Dispose()
+    {
+        Nav.LocationChanged -= OnLocationChanged;
+        Scope.Changed -= OnScopeChanged;
+    }
+}

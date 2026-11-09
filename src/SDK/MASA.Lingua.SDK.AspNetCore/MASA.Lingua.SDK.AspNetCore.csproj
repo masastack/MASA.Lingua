@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- 双目标；FrameworkReference 由各自 TFM 决定实际框架版本，天然支持 net8 与 net10。 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <Description>Thin ASP.NET Core IStringLocalizer adapter backed by local {culture}.json files, FrozenDictionary, file watching, and ETag/SSE hot reload.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\MASA.Lingua.SDK.Abstractions\MASA.Lingua.SDK.Abstractions.csproj" />
+  </ItemGroup>
+</Project>

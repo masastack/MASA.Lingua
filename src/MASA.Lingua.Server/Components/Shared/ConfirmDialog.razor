@@ -1,0 +1,50 @@
+@if (Open)
+{
+    <div class="dialog-layer" @onclick="CancelAsync">
+        <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1"
+             @ref="_dialog" @onclick:stopPropagation="true" @onkeydown="OnKeyDownAsync">
+            <h2 id="@_titleId">@Title</h2>
+            <p>@Message</p>
+            <div class="dialog-actions">
+                <button class="btn" type="button" @onclick="CancelAsync">@CancelText</button>
+                <button class="btn primary @(Danger ? "danger-fill" : "")" type="button" @onclick="ConfirmAsync">@ConfirmText</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    /// <summary>站内确认弹窗：点遮罩或按 Esc 等同取消，打开后焦点落在卡片上再由读屏器读出标题。</summary>
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public string Title { get; set; } = "确认操作";
+    [Parameter] public string Message { get; set; } = "";
+    [Parameter] public string ConfirmText { get; set; } = "确定";
+    [Parameter] public string CancelText { get; set; } = "取消";
+    [Parameter] public bool Danger { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    private readonly string _titleId = $"dialog-{Guid.NewGuid():N}";
+    private ElementReference _dialog;
+    private bool _focused;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Open && !_focused)
+        {
+            _focused = true;
+            await _dialog.FocusAsync();
+        }
+        else if (!Open)
+        {
+            _focused = false;
+        }
+    }
+
+    private Task ConfirmAsync() => OnConfirm.InvokeAsync();
+
+    private Task CancelAsync() => OnCancel.InvokeAsync();
+
+    private Task OnKeyDownAsync(KeyboardEventArgs e) =>
+        e.Key == "Escape" ? CancelAsync() : Task.CompletedTask;
+}

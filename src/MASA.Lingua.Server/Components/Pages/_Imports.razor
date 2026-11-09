@@ -1,0 +1,5 @@
+@* 管理后台的授权默认值是「需登录」：本目录下所有可路由页面都继承这条标注。
+   新增页面不必再手写 [Authorize]，漏写也不会退化成匿名可访问（测试 PageAuthorizationTests 守住）。
+   为什么不给全局 FallbackPolicy：/i18n、/api/v1 是机器调用链路（走项目密钥），
+   全局兜底会连带拦截，只能再逐个补 AllowAnonymous，反而更容易漏。 *@
+@attribute [Authorize]
