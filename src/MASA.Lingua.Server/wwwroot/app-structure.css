@@ -1,19 +1,22 @@
-/* MASA.Lingua 残留结构样式 —— 应用层唯一允许的自有 CSS（迁移 Masa.Blazor 后的白名单收口）。
-   规则（皮肤项目契约 docs/en/skin-contract.md）：
-   - 颜色一律取 Masa.Blazor 的通道 token：rgb(var(--m-theme-*))，中性灰用 on-surface × --m-border-opacity 组合；
+/* MASA.Lingua 残留结构样式 —— 应用层唯一允许的自有 CSS。
+   规则（详见 docs/ui/masa-blazor-utilities.zh-CN.md §14）：
+   - 颜色一律取 Masa.Blazor 的通道令牌：rgb(var(--m-theme-*))，中性灰用 on-surface × --m-border-opacity 组合；
    - 启动占位在 Blazor 电路建立前渲染（主题变量尚未注入），var() 内只给功能性回退值，不构成主题样式；
-   - 不覆盖 .m-* 组件选择器、不写品牌颜色字面量、不用 !important。
+   - 不覆盖 .m-* 组件选择器、不写颜色字面量、不用 !important（reduced-motion 兜底除外）。
    收录内容：
    - 词条矩阵：单元格原生 input 的编辑形态 + 粘性 AI 列（键击级优化依赖原生 input，见 EntryRow.razor 顶注）；
    - 键名 / 哈希 / 代码的等宽字体（数据标识符，非品牌样式）；
    - 启动占位（电路建立前的静态 HTML，Masa 类可用但主题变量未注入）；
-   - 屏幕阅读器专用文本。 */
+   - Masa 没有的工具类对应的几何：gap 间距、页面栏线、指标条、抽屉三段式、等宽数字。 */
 
-/* ---------- 屏幕阅读器专用（视觉隐藏，标准 clip 模式） ---------- */
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+/* ---------- 数据标识符的等宽字体 ----------
+   只换字体族，不改字号。 */
+code, pre { font-family: ui-monospace, "SF Mono", Consolas, "Courier New", monospace; }
 
-/* ---------- 数据标识符的等宽字体 ---------- */
-code, pre { font-family: ui-monospace, "SF Mono", Consolas, "Courier New", monospace; font-size: 0.9em; }
+/* Masa 的 .m-application code 会把字号压到 85%（14px→11.9px 可接受，12px→10.2px 就过了可读下限）。
+   在「code 嵌在表头 / caption 这类小字里」的位置显式标注 .lingua-code 恢复继承字号——
+   选择器写成 code.lingua-code（特异度 0-1-2）才稳压组件默认，且不触碰任何 .m-* 选择器。 */
+code.lingua-code { font-size: inherit; }
 
 pre.code {
   margin: 0; max-height: 360px; overflow: auto; padding: 12px 14px;
@@ -27,10 +30,16 @@ pre.code {
 
 /* AI 列贴住滚动区右缘（语种多时横向滚动仍可操作）：背景必须与卡片表面一致，否则滚动时下方内容透出来。
    注意用 surface-container 而不是 surface：Masa 的 .m-sheet（卡片）底色取 --m-theme-surface-container，
-   masa-design 皮肤里 surface=F0F3FA（应用背景）、surface-container=白（卡片）——取错 token 列会偏色。 */
+   而 --m-theme-surface 是应用背景——取错令牌列会偏色。这一取值与具体皮肤无关，任何皮肤下都成立。
+
+   宽度不写死：这一列的内容是可选的（无事可做时不渲染「补全」按钮，只剩一个 kebab），
+   写死 min-width 会让它长期占着一个空位。改成 width:1% + nowrap —— 表格布局把它压到
+   「最宽的那一行内容」的宽度：只有 kebab 的行约 52px，出现「补全 N 项」时自动放宽到约 140px。 */
 .lingua-matrix th.ai-col, .lingua-matrix td.ai-col {
   position: sticky; right: 0; z-index: 1;
-  min-width: 196px; padding-left: 12px; padding-right: 12px;
+  width: 1%;
+  white-space: nowrap;
+  padding-left: 12px; padding-right: 12px;
   background: rgb(var(--m-theme-surface-container));
   border-left: 1px solid rgba(var(--m-theme-on-surface), var(--m-border-opacity));
 }
@@ -55,8 +64,8 @@ pre.code {
 .cell[data-status="ai"]::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: rgb(var(--m-theme-info)); }
 .cell[data-status="ai"] .cell-input { padding-left: 12px; }
 
-.cell-actions { margin-top: 4px; padding-left: 10px; }
-.cell-notes { margin-top: 4px; padding-left: 10px; }
+.cell-actions { margin-top: 4px; padding-left: 10px; gap: 6px; }
+.cell-notes { margin-top: 4px; padding-left: 10px; gap: 4px 8px; }
 
 /* 词条列下方的「上下文与约束」常驻副行：常态虚线表明可填，悬停 / 聚焦转实线 */
 .ctx-inline { display: block; margin-top: 6px; }
@@ -85,3 +94,87 @@ body > .boot-splash:not(:first-child) { display: none; }
   .ai-spinner { animation: none; }
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
 }
+
+/* ==========================================================================
+   几何类（Masa.Blazor 没有对应工具类的那部分）
+   依据 docs/ui/masa-blazor-utilities.zh-CN.md §0.4：gap-* / position-* / sizing 在
+   Masa 1.12 里不存在，只能用白名单 CSS 表达。这里的规则一律只写几何，
+   颜色如果出现必为通道令牌；不覆盖 .m-*、不用 !important。
+   ========================================================================== */
+
+/* 页面内容栏线：与 MainLayout 的 pa-6 同一套留白，不再封顶宽度。
+   封顶（曾为 1560px + mx-auto）会在宽屏上留出两侧空槽——管理后台是数据密集界面，
+   把宽度让给表格比留白更有价值；超宽屏的阅读行长问题只影响长文，而这里全是表格与表单。 */
+.lingua-shell { width: 100%; }
+
+/* 顶栏作用域切换器的宽度上限（Masa 无 max-width 工具类） */
+.lingua-scope-select { max-width: 240px; }
+
+/* 页头：标题 + 说明在左，操作在右；窄屏自动换行。
+   min-width:0 让内部长文本（版本指纹、项目名）可以真正收缩而不是撑破布局。 */
+.lingua-page-head {
+  display: flex; flex-wrap: wrap; align-items: flex-start;
+  justify-content: space-between; gap: 16px; margin-bottom: 24px;
+}
+.lingua-page-head > .lingua-page-head-text { min-width: 0; }
+
+/* 纵向堆叠 + 统一间距（flex gap 在 Masa 里没有工具类） */
+.lingua-stack { display: flex; flex-direction: column; gap: 16px; }
+.lingua-stack-tight { display: flex; flex-direction: column; gap: 8px; }
+
+/* 工具行：筛选器 / 操作按钮的一行，窄屏自动换行 */
+.lingua-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+}
+
+/* 分隔式指标条：label 在上、value 在下，单元格之间用 1px 竖线分隔。
+   这是 app-screens.md §5 推荐的 KPI 形态（一个容器 + 分隔线，而不是并排卡片）。 */
+.lingua-metrics {
+  display: flex; flex-wrap: wrap; align-items: stretch;
+  border-radius: 8px; overflow: hidden;
+}
+.lingua-metric {
+  display: flex; flex-direction: column; gap: 4px;
+  flex: 1 1 140px; min-width: 120px; padding: 12px 16px;
+}
+.lingua-metric + .lingua-metric {
+  border-left: 1px solid rgba(var(--m-theme-on-surface), var(--m-border-opacity));
+}
+.lingua-metric-value { font-size: 24px; line-height: 1.25; font-variant-numeric: tabular-nums; }
+
+/* 堆叠完成度条：五段按数据比例铺满，段间无缝 */
+.lingua-bar {
+  display: flex; flex-grow: 1; height: 10px;
+  border-radius: 3px; overflow: hidden;
+}
+
+/* 数字列：等宽数字，让同一列的数字位对齐（Masa 没有 tabular-nums 工具类） */
+.lingua-num { font-variant-numeric: tabular-nums; }
+
+/* 抽屉内容里的小间距（Masa 无 gap-* / max-width 工具类） */
+.lingua-stack-lg { display: flex; flex-direction: column; gap: 20px; }
+.lingua-inline-gap { display: flex; gap: 8px; }
+.lingua-chip-gap { gap: 8px; }
+/* AI 列的行内动作：主操作（出现时才渲染）+ kebab，靠右对齐。
+   gap 无法用工具类表达（Masa 无 gap-*），宽度交给 flex 自适应，所以两者不会参差。 */
+.lingua-row-actions { gap: 4px; }
+.lingua-scope-note { min-width: 240px; flex-grow: 1; }
+.lingua-filter-ns { max-width: 200px; }
+.lingua-page-size { max-width: 132px; }
+.lingua-preview-culture { max-width: 160px; }
+
+/* 语种完成度行：语种名一列固定宽（与进度值列一起把堆叠条夹在中间），窄屏换行时不挤压 */
+.lingua-lang-cell { min-width: 200px; max-width: 260px; margin-right: 16px; }
+.lingua-progress-value { width: 72px; margin-right: 16px; }
+
+/* 已发布语言包的直达图标按钮：宽度固定 28px，不参与进度条的空间竞争 */
+.lingua-publish-link { flex: none; }
+
+/* 抽屉三段式：头部固定、正文滚动、footer 贴底。
+   MNavigationDrawer 内部有 __content 滚动容器，直接给子元素写 flex-grow 无效，
+   需要一整屏高的 flex column 包裹（见 Shared/SlideOver.razor 顶注）。 */
+.lingua-drawer { display: flex; flex-direction: column; height: 100%; min-height: 100%; }
+.lingua-drawer-head { flex: none; }
+.lingua-drawer-title { min-width: 0; }
+.lingua-drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.lingua-drawer-foot { flex: none; }

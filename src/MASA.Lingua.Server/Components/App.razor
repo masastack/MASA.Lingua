@@ -9,13 +9,10 @@
     <base href="/" />
     <title>MASA.Lingua 多语言支持与静态 JSON 分发平台</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    @* Masa.Blazor 组件库基础样式（皮肤 CSS 依赖它，必须在前） *@
+    @* Masa.Blazor 组件库基础样式 *@
     <link rel="stylesheet" href="_content/Masa.Blazor/css/masa-blazor.min.css" />
     @* MDI 图标字体（MIcon / MPagination 的 mdi-* 字形），自托管：内网部署不依赖外网 *@
     <link rel="stylesheet" href="css/materialdesign/v6.x/css/materialdesignicons.min.css" />
-    @* masa-design 皮肤 token：scoped 到 html[data-skin="masa-design"]，属性由下面的首帧脚本设置 *@
-    <link rel="stylesheet" href="_content/MasaDesign.Blazor/masa-design-skin.css" />
-    <script>document.documentElement.setAttribute('data-skin', 'masa-design');document.documentElement.setAttribute('data-theme', 'light');</script>
     @* 应用层唯一残留 CSS：词条矩阵原生输入形态 / 等宽字体 / 启动占位（全部 token 化，零颜色字面量） *@
     <link rel="stylesheet" href="app-structure.css?v=@CssVersion" />
     <HeadOutlet @rendermode="InteractiveServerPrerenderOff" />

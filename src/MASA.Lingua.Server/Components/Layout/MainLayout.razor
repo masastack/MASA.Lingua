@@ -7,20 +7,21 @@
 @inject IPmProjectDirectory PmDirectory
 @inject Microsoft.Extensions.Options.IOptions<MASA.Lingua.AI.LinguaAiOptions> AiOptions
 
-@* 外壳 = Masa.Blazor 标准后台布局：顶栏（品牌 + 项目/应用切换 + AI 引擎 + 用户）+ 左侧导航抽屉 + 主内容区。
-   观感全部交给 masa-design 皮肤 token（应用层零颜色字面量）；移动端（<md 断点）抽屉自动改为临时覆盖式，
-   对应原 app.css 里 860px 媒体查询的折叠侧栏行为。MApp 必须在交互电路内（MainLayout 里），
-   放进 App.razor 会被静态渲染冻结、SetTheme 更新不到 theme class。 *@
+@* 外壳 = Masa.Blazor 标准后台布局：侧栏（品牌 + 导航）+ 48px 顶栏（项目/应用切换 + AI 状态 + 用户）+ 主内容区。
+   观感全部来自 --m-theme-* 通道令牌（应用层零颜色字面量、零组件覆盖）。
+   MApp 必须在交互电路内（MainLayout 里），放进 App.razor 会被静态渲染冻结、SetTheme 更新不到 theme class。 *@
 <MApp>
     @* 布局：侧栏 App Permanent 全高常驻（品牌 + 导航一体），不做展开/收起；
        App bar 不设 ClippedLeft → 自动右移让位给侧栏，只在内容区上方。
        品牌 logo 在侧栏顶部（MNavigationDrawer PrependContent），顶栏只放操作控件。 *@
-    <MAppBar App Color="surface" Elevation="0">
+    <MAppBar App Flat Height="48">
+        @* 窄屏（<md）侧栏折叠为覆盖式抽屉，需要显式入口 *@
+        <MAppBarNavIcon Class="d-md-none" OnClick="@((MouseEventArgs e) => ToggleNav())" AriaLabel="打开导航" />
 
         @if (_pmFailed)
         {
-            <span title="@_pmError">PM 项目清单不可用</span>
-            <MButton Small OnClick="RetryProjectsAsync">重试</MButton>
+            <span class="text-body-2" title="@_pmError">PM 项目清单不可用</span>
+            <MButton Small Class="ml-2" OnClick="RetryProjectsAsync">重试</MButton>
         }
         else
         {
@@ -29,7 +30,7 @@
                      Items="ProjectOptions"
                      ItemText="o => o.Label" ItemValue="o => o.Value"
                      Value="@_projectKey" ValueChanged="OnProjectChanged"
-                     Label="项目" Dense Outlined HideDetails="true" Style="max-width:240px" />
+                     Label="项目" Dense Outlined HideDetails="true" Class="lingua-scope-select" />
             @* 全局共享命名空间不属于任何 PM 项目，没有应用可选 *@
             @if (CurrentProject is { } current)
             {
@@ -37,7 +38,7 @@
                          Items="AppsOf(current)"
                          ItemText="a => a.Name" ItemValue="a => a.Identity"
                          Value="@Scope.ProjectCode" ValueChanged="OnAppChanged"
-                         Label="应用" Dense Outlined HideDetails="true" Style="max-width:240px" Class="ml-4" />
+                         Label="应用" Dense Outlined HideDetails="true" Class="lingua-scope-select ml-4" />
             }
         }
 
@@ -46,18 +47,18 @@
         @{
             var ai = AiOptions.Value;
         }
+        @* AI 状态：常态只是一个文字入口（不抢注意力），点开才给说明 *@
         <MMenu OffsetY CloseOnContentClick="false">
             <ActivatorContent>
-                <MButton Variant="Text" @attributes="@context.Attrs">
-                    <MIcon Small Color="Success">mdi-circle</MIcon>
-                    <span class="ml-2">AI 翻译 · @ai.ModelId</span>
-                    <MIcon Small>mdi-chevron-down</MIcon>
+                <MButton Variant="Text" Small @attributes="@context.Attrs">
+                    <MIcon Small Class="mr-1">mdi-information-outline</MIcon>
+                    <span>AI · @ai.ModelId</span>
                 </MButton>
             </ActivatorContent>
             <ChildContent>
-                <MCard Outlined Style="max-width:360px">
-                    <MCardTitle>AI 翻译已启用</MCardTitle>
-                    <MCardText>
+                <MCard Outlined Width="360">
+                    <MCardTitle Class="text-subtitle-1">AI 翻译已启用</MCardTitle>
+                    <MCardText Class="text-body-2">
                         模型 <code>@ai.ModelId</code>，服务 <code>@AiEndpointLabel(ai)</code>。「AI 批量补全」与词条行最右列的「补全缺失 / 重新翻译」都会调用它：
                         按命中的术语注入提示词，违反术语库或占位符规则的译文会自动修复一次，仍不合格的标为「待复核」。
                         调用失败会直接显示原因，不会写入任何译文。
@@ -69,18 +70,19 @@
         <AuthorizeView>
             <Authorized>
                 @* 原生表单 POST：退出登录走服务端会话终结，不经 Blazor 交互 *@
-                <form method="post" action="/logout" class="d-flex align-center ml-2">
-                    <span class="mr-2" title="当前登录用户">@(context.User.Identity?.Name ?? "已登录")</span>
+                <form method="post" action="/logout" class="d-flex align-center ml-4">
+                    <span class="text-body-2 mr-2" title="当前登录用户">@(context.User.Identity?.Name ?? "已登录")</span>
                     <MButton Type="submit" Variant="Text" Small>退出</MButton>
                 </form>
             </Authorized>
         </AuthorizeView>
     </MAppBar>
 
-    @* 侧栏 Permanent 全高常驻：从屏幕顶端到底部，不做展开/收起，hamburger 也去掉。 *@
-    <MNavigationDrawer App Permanent Width="228">
+    @* 侧栏：桌面常驻（App 让它与内容区联动），窄屏（<md）由 Masa 自动切成临时覆盖式抽屉。
+       刻意不设 Permanent —— 那个属性会强制任何尺寸下都常驻，手机上会把内容区挤到只剩 150px。 *@
+    <MNavigationDrawer App Width="228" Value="@_navOpen" ValueChanged="@(v => _navOpen = v)">
         <PrependContent>
-            @* 品牌：logo + 名称，与侧栏导航一体（标准 MASA Stack 布局），顶栏只放操作控件 *@
+            @* 品牌：logo + 名称，与侧栏导航一体，顶栏只放操作控件 *@
             <div class="d-flex align-center px-4 pt-4 pb-2">
                 <img src="favicon.svg" width="24" height="24" alt="" aria-hidden="true" />
                 <span class="ml-2 text-h6">MASA.Lingua</span>
@@ -108,15 +110,16 @@
     </MNavigationDrawer>
 
     <MMain>
-        @* 栏线与留白：居中 + 24px 内边距，宽屏封顶 1560px（纯几何，与皮肤 token 无关） *@
-        <div class="mx-auto pa-6" style="max-width:1560px">            @* 与页面内容同一条栏线、同一套留白；横幅只在「该应用在 Lingua 尚无配置」时出现 *@
+        @* 栏线与留白：居中 + 24px 内边距，宽屏封顶 1560px（几何走白名单类，见 app-structure.css） *@
+        <div class="mx-auto pa-6 lingua-shell">
+            @* 横幅只在「该应用在 Lingua 尚无配置」时出现 *@
             @if (_missingLocalConfig)
             {
                 <MAlert Type="@AlertTypes.Warning" Dense Class="mb-6">
-                    @* 文案占满剩余宽度、操作按钮顶到右缘：flex 布局 + spacer，不写自定义 CSS *@
-                    <div class="d-flex align-center flex-wrap" style="gap:12px">
-                        <span>应用 <code>@Scope.ProjectCode</code> 在 Lingua 尚无多语言配置。</span>
-                        <div class="flex-grow-1"></div>
+                    @* 文案占满剩余宽度、操作按钮顶到右缘：flex + spacer，不写自定义 CSS *@
+                    <div class="d-flex align-center flex-wrap">
+                        <span class="mr-4">应用 <code>@Scope.ProjectCode</code> 在 Lingua 尚无多语言配置。</span>
+                        <MSpacer />
                         <MButton Small Color="Primary" OnClick="CreateLocalConfigAsync" Disabled="@_creating">
                             @(_creating ? "创建中…" : "创建多语言配置")
                         </MButton>
@@ -131,9 +134,13 @@
             }
             else
             {
-                <div class="d-flex align-center justify-center" style="gap:12px;min-height:200px" role="status">
-                    <MProgressCircular Indeterminate Size="22" Width="2" />
-                    <span>正在加载项目清单…</span>
+                @* 骨架加载：占位保持最终布局的高度，数据到位时页面不跳动 *@
+                <div class="lingua-stack" role="status" aria-live="polite">
+                    <div class="d-flex align-center">
+                        <MProgressCircular Indeterminate Size="18" Width="2" Class="mr-3" />
+                        <span class="text-body-2">正在加载项目清单…</span>
+                    </div>
+                    <MSkeletonLoader Type="card" />
                 </div>
             }
         </div>
@@ -181,11 +188,19 @@
         return href == "" ? path == "" : path.Equals(href, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>侧栏开合：桌面默认展开（Masa 在 >=md 时会自动保持常驻），窄屏默认收起走覆盖式抽屉。</summary>
+    private bool? _navOpen = true;
+
+    private void ToggleNav() => _navOpen = !(_navOpen ?? true);
+
+    /// <summary>MAppBarNavIcon 的 OnClick 是 EventCallback&lt;MouseEventArgs&gt;，这里只取点击时机。</summary>
+    private void ToggleNav(MouseEventArgs _) => ToggleNav();
+
     protected override void OnInitialized()
     {
-        // 皮肤：AddMasaDesign 注册了 masa-design-light/dark，这里选中亮色主题。
-        // html 的 data-skin / data-theme 属性已由 App.razor 的首帧内联脚本先行设置（皮肤 CSS 依赖它们）。
-        MasaBlazor.SetTheme(MasaDesignBlazorExtensions.LightThemeName);
+        // 亮色主题。Masa 的 SetTheme 会重写 <head> 里的主题样式表，必须在交互电路内调用
+        // （App.razor 是静态渲染，那里调用会被冻结）。
+        MasaBlazor.SetTheme("light");
 
         Nav.LocationChanged += OnLocationChanged;
         Scope.Changed += OnScopeChanged;

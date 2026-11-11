@@ -7,7 +7,6 @@ using MASA.Lingua.Server.Options;
 using MASA.Lingua.Server.Services;
 using MASA.Lingua.Server.Startup;
 using MASA.Lingua.Storage.EfCore;
-using MasaDesign.Blazor; // AddMasaDesign()：皮肤包注册扩展（AddMasaBlazor + UseMasaDesign）
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.ResponseCompression;
@@ -81,10 +80,8 @@ builder.Services.AddSingleton<IPmProjectDirectory>(sp => new PmProjectDirectory(
 // 右下角浮动提示：每个 Blazor 电路一份，由 MainLayout 里的 ToastHost 渲染
 builder.Services.AddScoped<ToastService>();
 
-// 管理后台 UI 组件库 + masa-design 皮肤（MASA Stack 品牌皮肤）：
-// AddMasaDesign 内部即 AddMasaBlazor + UseMasaDesign，注册 masa-design-light / masa-design-dark 两套主题。
-// 皮肤 CSS 的颜色 token 只作用于 html[data-skin="masa-design"]，属性由 App.razor 的首帧内联脚本设置。
-builder.Services.AddMasaDesign();
+// 管理后台 UI 组件库：AddMasaBlazor 注册内置 light / dark 两套主题。
+builder.Services.AddMasaBlazor();
 
 // 跨域：内网部署，前端（Vue / Blazor Wasm）与服务端分属不同来源，读发布产物、上报缺失词条、导入都是浏览器直连，
 // 因此统一全放开；没有 Cookie 凭据参与，不需要 AllowCredentials。

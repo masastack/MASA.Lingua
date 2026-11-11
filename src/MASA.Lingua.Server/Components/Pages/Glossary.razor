@@ -7,10 +7,10 @@
 
 <PageTitle>术语库 · MASA.Lingua</PageTitle>
 
-<div class="d-flex align-start justify-space-between flex-wrap mb-6" style="gap:1rem">
-    <div style="min-width:0">
+<div class="lingua-page-head">
+    <div class="lingua-page-head-text">
         <h1 class="text-h5 mb-1">术语库</h1>
-        <p class="text-body-2 mb-0">@Lede</p>
+        <p class="text-body-2 mb-0 text--secondary">@Lede</p>
     </div>
     <MButton Color="Primary" OnClick="StartCreate">新增术语</MButton>
 </div>
@@ -31,7 +31,7 @@
                 <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                     <div>
                         <h2 class="text-h6 mb-1">@(_editingId is null ? "新增标准术语" : $"编辑术语：{_sourceTerm}")</h2>
-                        <span class="text-caption">术语用于 AI 翻译 Prompt 注入与规则校验；违反术语的译文会被标记为「待复核」</span>
+                        <span class="text-caption text--secondary">术语用于 AI 翻译 Prompt 注入与规则校验；违反术语的译文会被标记为「待复核」</span>
                     </div>
                 </div>
 
@@ -63,7 +63,7 @@
                 {
                     @* 变体/禁用：长说明合并为区块级一句话（原来每个字段带两行 PersistentHint，行距被挤乱）；
                        每个语种一格，格内纵向堆「可接受变体 → 禁用译法」，同语种字段归组更易读。 *@
-                    <p class="text-caption mt-4 mb-2">
+                    <p class="text-caption text--secondary mt-4 mb-2">
                         变体与禁用均用逗号分隔：出现标准译法或任一变体即算遵循；禁用译法出现即违规（即使同时含标准译法），按词边界精确匹配，复数 / 派生词（如 Dashboards）需单独列出。
                     </p>
                     <MRow>
@@ -71,7 +71,7 @@
                         {
                             var c = culture;
                             <MCol Cols="12" Sm="6" Lg="4">
-                                <div class="d-flex flex-column" style="gap:0.75rem">
+                                <div class="lingua-stack-tight">
                                     <MTextField TValue="string" Value="@_variantInputs.GetValueOrDefault(c, "")" ValueChanged="@(v => SetVariantInput(c, v))"
                                                 Dense Outlined HideDetails="true" lang="@c"
                                                 Label="@($"{UiText.Locale(c)} 可接受变体")" Placeholder="如 Work space" />
@@ -84,22 +84,22 @@
                     </MRow>
                 }
 
-                <div class="d-flex flex-wrap align-center mt-4" style="gap:1.5rem">
+                <div class="lingua-toolbar mt-4">
                     <MSwitch TValue="bool" @bind-Value="_doNotTranslate" Label="禁止翻译（品牌词）" />
-                    <span class="text-caption">译文需原样保留整词：如 LinguaPhone 不会视为保留了 Lingua。</span>
+                    <span class="text-caption text--secondary">译文需原样保留整词：如 LinguaPhone 不会视为保留了 Lingua。</span>
                     <MSwitch TValue="bool" @bind-Value="_caseSensitive" Label="区分大小写" />
                 </div>
 
-                <div class="d-flex justify-end mt-4" style="gap:0.5rem">
+                <div class="d-flex justify-end mt-4">
                     <MButton OnClick="CancelEdit">@(_editingId is null ? "收起" : "取消编辑")</MButton>
-                    <MButton Color="Primary" Type="submit">@(_editingId is null ? "添加术语" : "保存修改")</MButton>
+                    <MButton Color="Primary" Type="submit" Class="ml-2">@(_editingId is null ? "添加术语" : "保存修改")</MButton>
                 </div>
             </form>
         </MCardText>
     </MCard>
 }
 
-<div class="d-flex align-center flex-wrap mb-6" style="gap:1rem">
+<div class="d-flex align-center flex-wrap mb-6">
     <MButtonGroup Dense aria-label="术语作用域">
         <MButton Color="Primary" Outlined="@(ScopeProject is not null)" OnClick="@(() => SetScopeAsync(false))">全局术语</MButton>
         <MButton Color="Primary" Outlined="@(ScopeProject is null)"
@@ -109,7 +109,7 @@
             项目术语@(CurrentProject is null ? "" : " · " + CurrentProject.Code)
         </MButton>
     </MButtonGroup>
-    <span class="text-caption flex-grow-1" style="min-width:240px;">
+    <span class="text-caption text--secondary lingua-scope-note">
         @(ScopeProject is null
             ? "全局术语对所有项目生效；项目内如定义了同名术语，则以项目术语为准（完整覆盖）。"
             : $"项目术语仅对「{ScopeProject.Code}」生效，并完整覆盖同名的全局术语。")
@@ -118,8 +118,8 @@
 
 @if (_isLoading)
 {
-    <div class="d-flex align-center justify-center py-16" style="gap:12px" Role="status">
-        <MProgressCircular Indeterminate Size="22" Width="2" />
+    <div class="d-flex align-center py-8" Role="status">
+        <MProgressCircular Indeterminate Size="18" Width="2" Class="mr-3" />
         <span class="text-body-2">正在加载术语与词条数据…</span>
     </div>
 }
@@ -127,18 +127,17 @@ else
 {
     @if (_usageComputing)
     {
-        <div class="d-flex mb-4" Role="status">
-            <span class="text-caption">术语已更新，正在重新分析命中词条与遵循率…</span>
+        <div class="mb-4" Role="status">
+            <span class="text-caption text--secondary">术语已更新，正在重新分析命中词条与遵循率…</span>
         </div>
     }
 
     @if (_compliance.Count > 0)
     {
-        @* 单行布局：标题 + 说明（flex-grow 撑满中间把 chips 推到右缘）+ 语种 chips 贴右，
-           对应原 app.css .toolbar .scope-note { flex: 1; min-width: 240px } 的效果 *@
-        <div class="d-flex align-center flex-wrap mb-4" style="gap:0.5rem 1rem" aria-label="术语遵循率">
+        @* 单行布局：标题 + 说明（撑满中间把 chips 推到右缘）+ 语种 chips 贴右 *@
+        <div class="lingua-toolbar mb-4" aria-label="术语遵循率">
             <strong class="text-body-2 flex-shrink-0">术语遵循率</strong>
-            <span class="text-caption flex-grow-1" style="min-width:240px;">
+            <span class="text-caption text--secondary lingua-scope-note">
                 统计单位为「词条 × 命中的术语」，只算有约束且已有译文的语种；@(ScopeProject is null ? "全局作用域为各项目合计" : "")
             </span>
             @foreach (var c in _compliance)
@@ -155,11 +154,12 @@ else
     <section aria-label="@(ScopeProject is null ? "全局术语" : "项目术语")" class="mb-6">
         @if (_terms.Count == 0)
         {
-            <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0">
-                @(ScopeProject is null
-                    ? "还没有全局术语。"
-                    : $"项目「{ScopeProject.Code}」还没有自己的术语，当前沿用 {_globalTerms.Count} 条全局术语。")
-            </MAlert>
+            <MCard>
+                <MEmptyState Icon="mdi-book-plus-outline"
+                             Text="@(ScopeProject is null
+                                 ? "还没有全局术语。用「新增术语」定义第一条，例如品牌名或固定译法。"
+                                 : $"项目「{ScopeProject.Code}」还没有自己的术语，当前沿用 {_globalTerms.Count} 条全局术语。")" />
+            </MCard>
         }
         else
         {
@@ -171,11 +171,11 @@ else
                             <th>策略</th>
                             @foreach (var c in ScopeCultures)
                             {
-                                <th>@UiText.Locale(c) 标准译法 <code>@c</code></th>
+                                <th>@UiText.Locale(c) 标准译法 <code class="lingua-code">@c</code></th>
                             }
                             <th class="text-right">引用词条</th>
                             <th>说明</th>
-                            <th class="text-right"><span class="sr-only">操作</span></th>
+                            <th class="text-right"><span class="d-sr-only">操作</span></th>
                         </tr>
                     </thead>
                 <tbody>
@@ -183,15 +183,15 @@ else
                     {
                         var t = term;
                         <tr @key="t.Id">
-                            <td class="text-nowrap">
+                            <td class="text-no-wrap">
                                 <strong>@t.SourceTerm</strong>
                                 @if (t.CaseSensitive)
                                 {
-                                    <MChip XSmall Label Class="ml-1" title="区分大小写">Aa</MChip>
+                                    <MChip Small Label Class="ml-1" title="区分大小写">Aa</MChip>
                                 }
                             </td>
-                            <td class="text-nowrap">
-                                <MChip XSmall Label>@(t.DoNotTranslate ? "禁止翻译" : "统一译法")</MChip>
+                            <td class="text-no-wrap">
+                                <MChip Small Label>@(t.DoNotTranslate ? "禁止翻译" : "统一译法")</MChip>
                             </td>
                             @foreach (var c in ScopeCultures)
                             {
@@ -199,9 +199,9 @@ else
                             }
                             <td class="text-right">@RefCount(t)</td>
                             <td>@t.Description</td>
-                            <td class="text-right text-nowrap">
-                                <MButton XSmall Variant="Text" OnClick="@(() => StartEdit(t))">编辑</MButton>
-                                <MButton XSmall Variant="Text" Color="Error" OnClick="@(() => DeleteTermAsync(t))">删除</MButton>
+                            <td class="text-right text-no-wrap">
+                                <MButton Small Variant="Text" OnClick="@(() => StartEdit(t))">编辑</MButton>
+                                <MButton Small Variant="Text" Color="Error" OnClick="@(() => DeleteTermAsync(t))">删除</MButton>
                             </td>
                         </tr>
                     }
@@ -217,13 +217,13 @@ else
             <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                 <div>
                     <h2 id="inherited-title" class="text-h6 mb-1">继承的全局术语</h2>
-                    <span class="text-caption">只读，共 @_globalTerms.Count 条；切换到「全局术语」后可编辑</span>
+                    <span class="text-caption text--secondary">只读，共 @_globalTerms.Count 条；切换到「全局术语」后可编辑</span>
                 </div>
             </div>
 
             @if (_globalTerms.Count == 0)
             {
-                <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0">还没有全局术语。</MAlert>
+                <MEmptyState Icon="mdi-book-open-variant" Text="还没有全局术语。" />
             }
             else
             {
@@ -235,7 +235,7 @@ else
                             <th>策略</th>
                             @foreach (var c in ScopeCultures)
                             {
-                                <th>@UiText.Locale(c) 标准译法 <code>@c</code></th>
+                                <th>@UiText.Locale(c) 标准译法 <code class="lingua-code">@c</code></th>
                             }
                             <th class="text-right">引用词条</th>
                             <th>在当前项目中</th>
@@ -245,22 +245,22 @@ else
                         @foreach (var g in _globalTerms)
                         {
                             var overridden = IsOverridden(g);
-                            <tr Class="@(overridden ? "text--disabled" : "")">
-                                <td class="text-nowrap"><strong>@g.SourceTerm</strong></td>
-                                <td class="text-nowrap"><MChip XSmall Label>@(g.DoNotTranslate ? "禁止翻译" : "统一译法")</MChip></td>
+                            <tr Class="@(overridden ? "text--secondary" : "")">
+                                <td class="text-no-wrap"><strong>@g.SourceTerm</strong></td>
+                                <td class="text-no-wrap"><MChip Small Label>@(g.DoNotTranslate ? "禁止翻译" : "统一译法")</MChip></td>
                                 @foreach (var c in ScopeCultures)
                                 {
                                     <td lang="@c">@RenderTarget(g, c)</td>
                                 }
                                 <td class="text-right">@RefCount(g)</td>
-                                <td class="text-nowrap">
+                                <td class="text-no-wrap">
                                     @if (overridden)
                                     {
-                                        <MChip XSmall>已被项目术语覆盖</MChip>
+                                        <MChip Small>已被项目术语覆盖</MChip>
                                     }
                                     else
                                     {
-                                        <MChip XSmall Color="Success">生效中</MChip>
+                                        <MChip Small Color="Success">生效中</MChip>
                                     }
                                 </td>
                             </tr>
@@ -278,7 +278,7 @@ else
             <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                 <div>
                     <h2 id="hits-title" class="text-h6 mb-1">术语命中的词条</h2>
-                    <span class="text-caption">@_hits.Count 条词条的源文案命中术语，匹配逻辑与规则检查一致</span>
+                    <span class="text-caption text--secondary">@_hits.Count 条词条的源文案命中术语，匹配逻辑与规则检查一致</span>
                 </div>
             </div>
             <MCard Class="mb-0">
@@ -308,7 +308,7 @@ else
                             <td>
                                 @foreach (var t in hit.Terms)
                                 {
-                                    <MChip XSmall Class="mr-1 mb-1">@t.SourceTerm</MChip>
+                                    <MChip Small Class="mr-1 mb-1">@t.SourceTerm</MChip>
                                 }
                             </td>
                             <td>
@@ -320,7 +320,7 @@ else
                                 {
                                     @foreach (var culture in hit.ViolatedCultures)
                                     {
-                                        <MChip XSmall Color="Error" Class="mr-1 mb-1">@culture 未遵循</MChip>
+                                        <MChip Small Color="Error" Class="mr-1 mb-1">@culture 未遵循</MChip>
                                     }
                                 }
                             </td>
@@ -331,7 +331,7 @@ else
             </MCard>
             @if (_hits.Count > MaxHitRows)
             {
-                <p class="text-caption mt-3 mb-0">另有 @(_hits.Count - MaxHitRows) 条命中词条未展示；完整结果可在「词条矩阵」运行检查后于检查报告查看。</p>
+                <p class="text-caption text--secondary mt-3 mb-0">另有 @(_hits.Count - MaxHitRows) 条命中词条未展示；完整结果可在「词条矩阵」运行检查后于检查报告查看。</p>
             }
         </section>
     }

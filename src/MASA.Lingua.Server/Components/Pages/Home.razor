@@ -24,41 +24,58 @@
     var reportRows = _validationIssues.Skip(reportPageIndex * _pageSize).Take(_pageSize).ToList();
 }
 
-<div class="d-flex align-start justify-space-between flex-wrap mb-6" style="gap:1rem">
-    <div style="min-width:0">
+@* 页头：标题 + 一句范围说明在左；右侧只有一个实心主操作（发布），
+   其余动作降为文本按钮——这一屏的问题是「能不能发」，不是「有多少个按钮」。 *@
+<div class="lingua-page-head">
+    <div class="lingua-page-head-text">
         <h1 class="text-h5 mb-1">词条矩阵</h1>
-        <p class="text-body-2 mb-0">@Lede</p>
+        <p class="text-body-2 mb-0 text--secondary">@Lede</p>
     </div>
-    <div class="d-flex align-center flex-wrap" style="gap:0.5rem">
-        @* 应用尚无多语言配置（非共享命名空间且没有项目数据）：这五个操作按钮都没有意义
-           （检查/补全/发布/语种/密钥都需要已存在的词条或项目配置），只显示顶栏下方的「创建多语言配置」横幅。 *@
-        @if (IsSharedScope || CurrentProject is not null)
-        {
-            @if (!IsSharedScope && _blockingCount > 0)
+    @if (CurrentProject is { } headProject && !IsSharedScope)
+    {
+        <div class="d-flex align-center flex-wrap">
+            @if (_blockingCount > 0)
             {
-                <MChip Small Color="Error"
+                <MChip Small Color="Error" Class="mr-3"
                        title="Error 级规则（占位符 / 长度 / HTML）与术语库违规；已进入发布的这类译文会被发布门禁拦截（按项目发布策略）">
                     阻断问题 @_blockingCount
                 </MChip>
             }
-            <MButton OnClick="OnRunCheckClickedAsync" title="按规则与术语库重新检查当前范围内的全部译文">运行检查</MButton>
-            <MButton OnClick="RunAiBatchTranslateAsync" Disabled="@_isBusy"
+            <MButton Variant="Text" OnClick="OnRunCheckClickedAsync" title="按规则与术语库重新检查当前范围内的全部译文">运行检查</MButton>
+            <MButton Variant="Text" OnClick="RunAiBatchTranslateAsync" Disabled="@_isBusy"
                      title="只处理缺失、草稿与待复核的译文；已审核与 AI 已通过的译文不会被覆盖">
                 @(_isBusy ? "AI 处理中…" : "AI 批量补全")
             </MButton>
-        }
-        @if (!IsSharedScope && CurrentProject is not null)
-        {
-            @* 项目级配置不常用，但改的是「这个页面怎么工作」的前提：放在页头，和页面标题同一层级。 *@
-            <MButton aria-haspopup="dialog" title="维护项目支持的语种与默认语种（改完立即生效）" OnClick="OpenCultureDrawer">语种设置</MButton>
-            <MButton aria-haspopup="dialog" title="查看 / 重置缺词上报的项目写密钥（X-Lingua-Key）" OnClick="OpenWriteKeyDrawer">接入密钥</MButton>
-            @* 发布固定排在最后：它是这一组里唯一的写线上动作（实心主按钮）。 *@
-            <MButton Color="Primary" OnClick="PublishCurrentProjectAsync" Disabled="@_isBusy"
+            <MMenu OffsetY>
+                <ActivatorContent>
+                    <MButton Variant="Text" @attributes="@context.Attrs">
+                        更多<MIcon Small Class="ml-1">mdi-chevron-down</MIcon>
+                    </MButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MList Dense>
+                        <MListItem OnClick="@(_ => OpenCultureDrawer())">
+                            <MListItemContent>
+                                <MListItemTitle>语种设置</MListItemTitle>
+                                <MListItemSubtitle>维护支持的语种与默认语种，改完立即生效</MListItemSubtitle>
+                            </MListItemContent>
+                        </MListItem>
+                        <MListItem OnClick="@(_ => OpenWriteKeyDrawer())">
+                            <MListItemContent>
+                                <MListItemTitle>接入密钥</MListItemTitle>
+                                <MListItemSubtitle>缺词上报用的 X-Lingua-Key，可查看与重置</MListItemSubtitle>
+                            </MListItemContent>
+                        </MListItem>
+                    </MList>
+                </ChildContent>
+            </MMenu>
+            @* 发布是这一组里唯一的写线上动作，只有它用实心主按钮 *@
+            <MButton Color="Primary" Class="ml-2" OnClick="PublishCurrentProjectAsync" Disabled="@_isBusy"
                      title="生成 App_Data/i18n/{项目}/{语种}.json（只经 /i18n 分发端点对外，不直出静态目录），并通过 SSE 通知业务端重新同步">
                 发布
             </MButton>
-        }
-    </div>
+        </div>
+    }
 </div>
 
 @if (!string.IsNullOrEmpty(_statusMessage))
@@ -71,8 +88,8 @@
 
 @if (_isLoading)
 {
-    <div class="d-flex align-center justify-center py-16" style="gap:12px" Role="status">
-        <MProgressCircular Indeterminate Size="22" Width="2" />
+    <div class="d-flex align-center py-8" Role="status">
+        <MProgressCircular Indeterminate Size="18" Width="2" Class="mr-3" />
         <span class="text-body-2">正在加载当前项目的词条数据…</span>
     </div>
 }
@@ -80,20 +97,29 @@ else
 {
     <section aria-labelledby="coverage-title" class="mb-6">
         <MCard>
+            <MCardText Class="pa-0">
+                @* 指标条：一个容器 + 1px 分隔线（app-screens §5 的 KPI 形态），不是四张并排卡片，
+                   也没有图标与 sparkline。数值来自与堆叠条同一批数据，避免同一事实两处对不上。 *@
+                <div class="lingua-metrics">
+                    @foreach (var item in LegendItems)
+                    {
+                        <div class="lingua-metric">
+                            <span class="text-caption text--secondary">@item.Label</span>
+                            <span class="lingua-metric-value">@item.Count</span>
+                        </div>
+                    }
+                </div>
+            </MCardText>
+            <MDivider />
+
             <MCardText>
                 <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                     <h2 id="coverage-title" class="text-h6 mb-0">语种完成度</h2>
-                    @if (_entryCount > 0)
+                    @if (CurrentProject is { } projHead)
                     {
-                        <div class="d-flex flex-wrap align-center" aria-label="图例">
-                            @foreach (var item in LegendItems)
-                            {
-                                <span class="d-flex align-center mr-4 text-body-2">
-                                    <MSheet Width="10" Height="10" Color="@LegendColor(item.Css)" Class="mr-1" Rounded="true"></MSheet>
-                                    @item.Label <b class="ml-1">@item.Count</b>
-                                </span>
-                            }
-                        </div>
+                        <span class="text-caption">
+                            @_entryCount 条词条 · @ActiveCultures.Count 个语种
+                        </span>
                     }
                 </div>
 
@@ -111,34 +137,42 @@ else
                             {
                                 <MDivider />
                             }
-                            <div class="d-flex align-center flex-wrap py-3" style="gap:1rem">
-                                <div class="d-flex align-center flex-wrap" style="width:220px;min-width:200px;gap:0.25rem">
-                                    <strong lang="@c.Culture">@UiText.Locale(c.Culture)</strong>
-                                    <code>@c.Culture</code>
+                            <div class="d-flex align-center flex-wrap py-3">
+                                <div class="d-flex align-center flex-wrap lingua-lang-cell">
+                                    <strong lang="@c.Culture" class="mr-2">@UiText.Locale(c.Culture)</strong>
+                                    <code class="mr-2">@c.Culture</code>
                                     @if (IsSourceCulture(c.Culture))
                                     {
-                                        <span class="text-caption">源语言</span>
+                                        <span class="text-caption text--secondary mr-2">源语言</span>
                                     }
                                     @if (GlossaryOf(c.Culture) is { Percent: { } pct } g)
                                     {
-                                        <MChip XSmall Color="@(pct >= 100 ? "Success" : pct >= 80 ? "Warning" : "Error")"
+                                        <MChip Small Color="@(pct >= 100 ? "Success" : pct >= 80 ? "Warning" : "Error")"
                                                title="@($"术语遵循率：{g.Followed} / {g.Checked}（源文案命中的术语中，译文遵循标准译法或可接受变体且未使用禁用译法的比例）")">
                                             术语 @(pct)%
                                         </MChip>
                                     }
                                 </div>
-                                @* 五段堆叠条：各段宽度由数据驱动（flex 比例），颜色全部来自皮肤 token（Success/Info/Warning/Grey） *@
-                                <div class="d-flex flex-grow-1" style="height:10px;border-radius:3px;overflow:hidden" Role="img" aria-label="@CoverageSummary(c)">
+                                @* 五段堆叠条：各段宽度由数据驱动（flex 比例），颜色全部来自主题通道
+                                   （Success/Info/Warning/Grey）。几何走 .lingua-bar（Masa 无 sizing/gap 工具类）。 *@
+                                <div class="lingua-bar mr-4" Role="img" aria-label="@CoverageSummary(c)">
                                     @if (c.Approved > 0) { <MSheet Color="Success" Style="@Flex(c.Approved)" title="@($"已审核 {c.Approved}")"></MSheet> }
                                     @if (c.Ai > 0) { <MSheet Color="Info" Style="@Flex(c.Ai)" title="@($"AI 已译 {c.Ai}")"></MSheet> }
                                     @if (c.Review > 0) { <MSheet Color="Warning" Style="@Flex(c.Review)" title="@($"待复核 {c.Review}")"></MSheet> }
                                     @if (c.Missing > 0) { <MSheet Color="Grey" Style="@Flex(c.Missing)" title="@($"缺失 {c.Missing}")"></MSheet> }
                                 </div>
-                                <div class="text-right text-body-2" style="width:72px">@(c.Approved + c.Ai) <span class="text-caption">/ @c.Total</span></div>
+                                <div class="text-right text-body-2 lingua-num lingua-progress-value">@(c.Approved + c.Ai) <span class="text-caption text--secondary">/ @c.Total</span></div>
                                 @if (!IsSharedScope)
                                 {
-                                    <MButton Small Variant="Text" Href="@($"/i18n/{SelectedProjectCode}/{c.Culture}.json")" target="_blank" rel="noopener">
-                                        <code>@(c.Culture).json</code>
+                                    @* 已发布语言包的直达链接：图标按钮 + 悬停提示，不再用一个占 ~100px、
+                                       把进度条挤短的文字按钮。 *@
+                                    <MButton Small Icon Variant="Text"
+                                             Href="@($"/i18n/{SelectedProjectCode}/{c.Culture}.json")"
+                                             target="_blank" rel="noopener"
+                                             Class="lingua-publish-link"
+                                             title="@($"{c.Culture}.json · 在新标签页打开已发布文件")"
+                                             AriaLabel="@($"{c.Culture}.json")">
+                                        <MIcon Small>mdi-file-eye-outline</MIcon>
                                     </MButton>
                                 }
                             </div>
@@ -149,22 +183,22 @@ else
                 <MDivider Class="mt-4 mb-3" />
                 @if (IsSharedScope)
                 {
-                    <span class="text-caption">共享命名空间随各项目一起发布，不单独生成文件。</span>
+                    <span class="text-caption text--secondary">共享命名空间随各项目一起发布，不单独生成文件。</span>
                 }
                 else if (CurrentProject is { } proj)
                 {
-                    <div class="d-flex flex-wrap align-center" style="gap:0.5rem 1.25rem">
-                        <span class="text-caption">最近发布 <strong><LocalTime Value="@proj.LastPublishedAt" EmptyText="尚未发布" /></strong></span>
+                    <div class="d-flex flex-wrap align-center">
+                        <span class="text-caption text--secondary mr-6">最近发布 <strong class="text--primary"><LocalTime Value="@proj.LastPublishedAt" EmptyText="尚未发布" /></strong></span>
                         @if (!string.IsNullOrEmpty(proj.LastPublishedVersionHash))
                         {
                             @* 指纹是核对线上产物与草稿是否一致时唯一能逐字符比对的凭据：不截断，整串可选中、可复制 *@
-                            <span class="text-caption d-flex align-center">
+                            <span class="text-caption text--secondary d-flex align-center mr-6">
                                 版本指纹
-                                <code title="@proj.LastPublishedVersionHash">@proj.LastPublishedVersionHash</code>
-                                <MButton XSmall Variant="Text" title="复制完整版本指纹" OnClick="CopyVersionHashAsync">复制</MButton>
+                                <PCopyableText Text="@proj.LastPublishedVersionHash" Class="ml-1">
+                                    <code title="@proj.LastPublishedVersionHash">@proj.LastPublishedVersionHash</code>
+                                </PCopyableText>
                             </span>
                         }
-                        <span class="text-caption">@_entryCount 条词条 · @ActiveCultures.Count 个语种</span>
                     </div>
                 }
             </MCardText>
@@ -176,19 +210,19 @@ else
            与页签/表格之间的背景色断层也就消失了（原布局三层背景交替造成的割裂感）。 *@
         <MCard Class="mb-6">
             <MTabs Value="@ViewTabValue" ValueChanged="OnViewTabChanged" aria-label="词条视图">
-                <MTab Value="@((int)MatrixView.Entries)">词条<MChip XSmall Class="ml-2">@rows.Count</MChip></MTab>
-                <MTab Value="@((int)MatrixView.Report)">检查报告<MChip XSmall Class="ml-2">@_validationIssues.Count</MChip></MTab>
+                <MTab Value="@((int)MatrixView.Entries)">词条<MChip Small Class="ml-2">@rows.Count</MChip></MTab>
+                <MTab Value="@((int)MatrixView.Report)">检查报告<MChip Small Class="ml-2">@_validationIssues.Count</MChip></MTab>
             </MTabs>
             <MDivider />
 
         @if (_view == MatrixView.Entries)
         {
-            <div class="d-flex align-center flex-wrap pa-4" style="gap:0.5rem 1rem">
+            <div class="lingua-toolbar pa-4">
                 <MSelect TItem="NsOption" TItemValue="string" TValue="string"
                          Items="NamespaceOptions"
                          ItemText="o => o.Label" ItemValue="o => o.Value"
                          @bind-Value="_selectedNamespaceCode" @bind-Value:after="OnNamespaceChanged"
-                         Dense Outlined HideDetails="true" Style="max-width:200px" aria-label="命名空间" />
+                         Dense Outlined HideDetails="true" Class="lingua-filter-ns" aria-label="命名空间" />
                 @* 防抖在组件内完成：键击只重渲染输入框本身，停顿后才通知本页重新筛选（否则每个键击都整页重渲染两次） *@
                 <SearchBox Value="@_searchKeyword" ValueChanged="OnSearchChanged"
                            AriaLabel="搜索 Key、文案、上下文"
@@ -197,12 +231,12 @@ else
                     <MButton Color="Primary" Outlined="@_onlyNeedsReview" OnClick="@(() => SetNeedsReviewFilter(false))">全部</MButton>
                     <MButton Color="Primary" Outlined="@(!_onlyNeedsReview)" OnClick="@(() => SetNeedsReviewFilter(true))">仅待复核</MButton>
                 </MButtonGroup>
-                <div class="flex-grow-1"></div>
+                <MSpacer />
                 @if (_dirtyRowIds.Count > 0)
                 {
-                    <span class="text-caption warning--text d-flex align-center" Role="status">
+                    <span class="text-caption text--secondary d-flex align-center" Role="status">
                         @_dirtyRowIds.Count 处修改未保存 · Enter 保存
-                        <MButton XSmall Variant="Text" OnClick="DiscardAllEdits">放弃全部</MButton>
+                        <MButton Small Variant="Text" OnClick="DiscardAllEdits">放弃全部</MButton>
                     </span>
                 }
                 <MButton aria-expanded="@(_showAdd ? "true" : "false")" OnClick="@(() => _showAdd = !_showAdd)">
@@ -247,9 +281,9 @@ else
                                         Label="最大长度" Placeholder="如 25" />
                         </MCol>
                     </MRow>
-                    <div class="d-flex justify-end mt-4" style="gap:0.5rem">
+                    <div class="d-flex justify-end mt-4">
                         <MButton OnClick="@(() => _showAdd = false)">收起</MButton>
-                        <MButton Color="Primary" Type="submit">保存词条</MButton>
+                        <MButton Color="Primary" Type="submit" Class="ml-2">保存词条</MButton>
                     </div>
                 </form>
                 <MDivider />
@@ -257,13 +291,10 @@ else
 
             @if (rows.Count == 0)
             {
-                <div class="pa-4">
-                    <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0">
-                        @(string.IsNullOrWhiteSpace(_searchKeyword) && string.IsNullOrEmpty(_selectedNamespaceCode)
-                            ? "还没有词条。"
-                            : "没有符合当前筛选的词条。")
-                    </MAlert>
-                </div>
+                <MEmptyState Icon="mdi-table-search"
+                             Text="@(string.IsNullOrWhiteSpace(_searchKeyword) && string.IsNullOrEmpty(_selectedNamespaceCode)
+                                 ? "这一范围里还没有词条。用「新增词条」添加，或到「导入与发布」导入现有 JSON。"
+                                 : "没有符合当前筛选的词条。清除搜索词或切换命名空间再看。")" />
             }
             else
             {
@@ -277,14 +308,14 @@ else
                                 {
                                     var culture = ActiveCultures[i];
                                     @* 默认语种（源文案语种）永远排第一列：它是其余译文的参照，放在中间会被滚动挤出去 *@
-                                    <th lang="@culture">@UiText.Locale(culture) <code>@culture</code>
+                                    <th lang="@culture">@UiText.Locale(culture) <code class="lingua-code">@culture</code>
                                         @if (i == 0 && IsSourceCulture(culture))
                                         {
-                                            <MChip XSmall Class="ml-1">源</MChip>
+                                            <MChip Small Class="ml-1">源</MChip>
                                         }
                                     </th>
                                 }
-                                <th class="act ai-col">AI 翻译</th>
+                                <th class="ai-col">AI 翻译</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -312,14 +343,14 @@ else
                         </tbody>
                     </MSimpleTable>
                 <MDivider />
-                <div class="d-flex align-center flex-wrap pa-4" style="gap:0.75rem">
-                    <span class="text-caption">共 <b>@rows.Count</b> 条</span>
+                <div class="lingua-toolbar pa-4">
+                    <span class="text-caption text--secondary">共 <b class="text--primary">@rows.Count</b> 条</span>
                     <MSelect TItem="int" TItemValue="int" TValue="int"
                              Items="PageSizeOptions"
                              ItemText='@(s => $"每页 {s} 条")' ItemValue="s => s"
                              @bind-Value="_pageSize" @bind-Value:after="ResetPage"
-                             Dense Outlined HideDetails="true" Style="max-width:132px" aria-label="每页条数" />
-                    <div class="flex-grow-1"></div>
+                             Dense Outlined HideDetails="true" Class="lingua-page-size" aria-label="每页条数" />
+                    <MSpacer />
                     <MPagination Value="@(pageIndex + 1)" ValueChanged="OnMatrixPageChanged"
                                  Length="@totalPages" TotalVisible="5" Circle="true" />
                 </div>
@@ -328,7 +359,7 @@ else
         else
         {
             <div class="pa-4">
-                <span class="text-caption">
+                <span class="text-caption text--secondary">
                     @(_validationIssues.Count == 0
                         ? "当前范围内没有发现问题。"
                         : $"共 {_validationIssues.Count} 项，来自当前筛选范围内的 {rows.Count} 条词条。")
@@ -351,7 +382,7 @@ else
                             <th>问题</th>
                             <th>级别</th>
                             <th>建议值</th>
-                            <th class="text-right"><span class="sr-only">操作</span></th>
+                            <th class="text-right"><span class="d-sr-only">操作</span></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -362,32 +393,32 @@ else
                                 <td><code>@issue.Culture</code></td>
                                 <td>
                                     <strong class="text-body-2">@UiText.Rule(issue.RuleCode)</strong>
-                                    <span class="d-block text-caption">@issue.Message</span>
+                                    <span class="d-block text-caption text--secondary">@issue.Message</span>
                                 </td>
-                                <td class="text-nowrap">
-                                    <MChip XSmall Color="@(issue.Severity == IssueSeverity.Error ? "Error" : "Warning")">@SeverityLabel(issue.Severity)</MChip>
+                                <td class="text-no-wrap">
+                                    <MChip Small Color="@(issue.Severity == IssueSeverity.Error ? "Error" : "Warning")">@SeverityLabel(issue.Severity)</MChip>
                                 </td>
                                 <td>
                                     @if (string.IsNullOrWhiteSpace(issue.SuggestedFix))
                                     {
-                                        <span class="text-caption">—</span>
+                                        <span class="text-caption text--secondary">—</span>
                                     }
                                     else
                                     {
                                         @issue.SuggestedFix
                                     }
                                 </td>
-                                <td class="text-right text-nowrap">
-                                    <MButton XSmall Variant="Text" OnClick="@(() => LocateIssue(issue))">在矩阵中定位</MButton>
+                                <td class="text-right text-no-wrap">
+                                    <MButton Small Variant="Text" OnClick="@(() => LocateIssue(issue))">在矩阵中定位</MButton>
                                 </td>
                             </tr>
                         }
                     </tbody>
                 </MSimpleTable>
                 <MDivider />
-                <div class="d-flex align-center flex-wrap pa-4" style="gap:0.75rem">
-                    <span class="text-caption">共 <b>@_validationIssues.Count</b> 项</span>
-                    <div class="flex-grow-1"></div>
+                <div class="lingua-toolbar pa-4">
+                    <span class="text-caption text--secondary">共 <b class="text--primary">@_validationIssues.Count</b> 项</span>
+                    <MSpacer />
                     <MPagination Value="@(reportPageIndex + 1)" ValueChanged="OnReportPageChanged"
                                  Length="@reportTotalPages" TotalVisible="5" Circle="true" />
                 </div>
@@ -418,13 +449,13 @@ else
     <ChildContent>
         @if (CurrentProject is { } cultureProject)
         {
-            <div class="d-flex flex-column" style="gap:1.25rem">
+            <div class="lingua-stack-lg">
                 <div>
                     <div class="text-body-2 mb-1">
                         支持的语种
-                        <span class="text-caption">点击 × 移除；默认语种不可移除，需先把默认语种改为其他语种。改动立即保存。</span>
+                        <span class="text-caption text--secondary">点击 × 移除；默认语种不可移除，需先把默认语种改为其他语种。改动立即保存。</span>
                     </div>
-                    <div class="d-flex flex-wrap" style="gap:0.5rem">
+                    <div class="d-flex flex-wrap lingua-chip-gap">
                         @foreach (var culture in cultureProject.SupportedCultures)
                         {
                             var isDefault = string.Equals(culture, cultureProject.DefaultCulture, StringComparison.OrdinalIgnoreCase);
@@ -446,7 +477,7 @@ else
                 <div>
                     <div class="text-body-2 mb-1">
                         新增语种
-                        <span class="text-caption">输入中文名、英文名或代码都能搜索（如 韩语 / Korean / ko）；选中即添加，不需要再点保存</span>
+                        <span class="text-caption text--secondary">输入中文名、英文名或代码都能搜索（如 韩语 / Korean / ko）；选中即添加，不需要再点保存</span>
                     </div>
                     @* 排除已支持的语种：搜不到重复项，也不会因为手写拼错多出一个空语种。
                        ExtraCodes 补上默认语种（字段缓存，见 _addCultureExtraCodes 的说明）：ICU 枚举不到 zh-CN
@@ -463,7 +494,7 @@ else
                 <div>
                     <div class="text-body-2 mb-1">
                         默认语种
-                        <span class="text-caption">源文案语种，也是译文缺失时的回退语种；改它会改变「源语言」列的语义</span>
+                        <span class="text-caption text--secondary">源文案语种，也是译文缺失时的回退语种；改它会改变「源语言」列的语义</span>
                     </div>
                     @* 受控组件：用户选了别的语种但取消确认时，显示值跟随参数回到实际值，原 @key 复位技巧不再需要 *@
                     <MSelect TItem="string" TItemValue="string" TValue="string"
@@ -481,7 +512,7 @@ else
         }
     </ChildContent>
     <FooterContent>
-        <span class="text-caption">新增语种后词条初始为「缺失」，可用「AI 批量补全」生成译文；重新发布后语种才会进入各端 manifest。移除语种不会删除已有译文，重新添加即可恢复。</span>
+        <span class="text-caption text--secondary">新增语种后词条初始为「缺失」，可用「AI 批量补全」生成译文；重新发布后语种才会进入各端 manifest。移除语种不会删除已有译文，重新添加即可恢复。</span>
         <MButton OnClick="CloseCultureDrawer">收起</MButton>
     </FooterContent>
 </SlideOver>
@@ -494,7 +525,7 @@ else
         {
             <div>
                 <div class="text-body-2 mb-1">当前密钥</div>
-                <div class="d-flex" style="gap:0.5rem">
+                <div class="d-flex lingua-inline-gap">
                     <MTextField TValue="string"
                                 Value="@(_revealWriteKey ? keyProject.WriteKey : "••••••••••••••••••••••••")"
                                 Readonly="true" Dense Outlined HideDetails="true" Class="flex-grow-1" aria-label="当前密钥" />
@@ -505,7 +536,7 @@ else
         }
     </ChildContent>
     <FooterContent>
-        <span class="text-caption">业务项目配置 <code>Lingua:WriteKey</code> 填这里复制的密钥；重置后旧密钥立即失效，需同步更新业务配置。</span>
+        <span class="text-caption text--secondary">业务项目配置 <code class="lingua-code">Lingua:WriteKey</code> 填这里复制的密钥；重置后旧密钥立即失效，需同步更新业务配置。</span>
         <MButton Color="Error" OnClick="RegenerateWriteKeyAsync" Disabled="@_isBusy">重置密钥</MButton>
     </FooterContent>
 </SlideOver>
@@ -539,15 +570,6 @@ else
             return list;
         }
     }
-
-    // ---- 图例 / 堆叠条的段颜色：数据状态 → 皮肤 token 色 ----
-    private static string LegendColor(string css) => css switch
-    {
-        "approved" => "Success",
-        "ai" => "Info",
-        "review" => "Warning",
-        _ => "Grey"
-    };
 
     // ---- MTabs / MPagination 的值形状适配（StringNumber / 1 基页码） ----
     private StringNumber? ViewTabValue => (int)_view;

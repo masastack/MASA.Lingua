@@ -1,14 +1,17 @@
 @* 站内确认弹窗：Esc / 遮罩点击等同取消（MDialog 默认行为），焦点管理与 aria 由组件内置。
-   页面用 bool Open 控制开关；组件自关（Esc/遮罩）时通过 OnCancel 通知页面回写状态。 *@
+   页面用 bool Open 控制开关；组件自关（Esc/遮罩）时通过 OnCancel 通知页面回写状态。
+
+   按钮顺序按「取消在前、确认在后」：确认是实心（危险操作给 Error，普通操作给 Primary），
+   取消是文本按钮——一眼能看出哪个是主操作、哪个是退路。 *@
 <MDialog @bind-Value="_open" @bind-Value:after="OnInternalChanged" MaxWidth="440">
     <ChildContent>
         <MCard>
-            <MCardTitle>@Title</MCardTitle>
-            <MCardText>@Message</MCardText>
+            <MCardTitle Class="text-h6">@Title</MCardTitle>
+            <MCardText Class="text-body-2">@Message</MCardText>
             <MCardActions>
                 <MSpacer />
-                <MButton OnClick="CancelAsync">@CancelText</MButton>
-                <MButton Color="@(Danger ? "Error" : "Primary")" OnClick="ConfirmAsync">@ConfirmText</MButton>
+                <MButton Variant="Text" OnClick="CancelAsync">@CancelText</MButton>
+                <MButton Color="@(Danger ? "Error" : "Primary")" Class="ml-2" OnClick="ConfirmAsync">@ConfirmText</MButton>
             </MCardActions>
         </MCard>
     </ChildContent>
