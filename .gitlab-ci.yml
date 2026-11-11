@@ -2,4 +2,4 @@ include:
   - project: 'external-pipeline/masastack-pipeline'
     ref: 'main'
     file: 
-      - '/auth.yml'
+      - '/lingua.yml'
