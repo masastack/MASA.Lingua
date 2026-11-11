@@ -1,38 +1,5 @@
-# 站点部署流水线：GitHub 仓库经 .github/workflows/mirror-gitlab.yml 镜像到本 GitLab 后在此触发，
-# 模板沿用 MASA Stack 的 argocd 部署模板。
-# NuGet 包发布不在此处：由 GitHub Actions 在 Release published 时发布到 nuget.org
-# （见 GitHub 仓库 .github/workflows/package_push_nuget.org.yml）。
-include:
-  - project: "cicd/back-cicd"
-    ref: "main"
-    file:
-      - "/masastack-argocd-templates.yml"
-
-
-.pub-lingua-service:
-  variables:
-    REGISTRY_WAREHOUSE: masa
-    IMAGE_NAME_HEAD: $CI_ALI_REGISTRY_DOMAIN/$REGISTRY_WAREHOUSE/$PROJECT_NAME
-    PROJECT_NAME: lingua-service
-    PROJECT_PATH: src/MASA.Lingua.Server/**/*
-    DOCKER_FILE_PATH: src/MASA.Lingua.Server/Dockerfile
-  rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
-      changes:
-        - $PROJECT_PATH
-
-build:lingua-service:
-  extends:
-    - .docker-build
-    - .pub-lingua-service
-
-push-sec:lingua-service:
-  extends:
-    - .push-sec
-    - .pub-lingua-service
-
-push-prd:lingua-service:
-  extends:
-    - .push-prd
-    - .pub-lingua-service
-
+include: 
+  - project: 'external-pipeline/masastack-pipeline'
+    ref: 'main'
+    file: 
+      - '/auth.yml'
