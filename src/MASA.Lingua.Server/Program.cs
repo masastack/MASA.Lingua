@@ -46,8 +46,8 @@ builder.Host.UseSerilog((context, _, loggerConfiguration) => loggerConfiguration
         fileSizeLimitBytes: 50 * 1024 * 1024,
         flushToDiskInterval: TimeSpan.FromSeconds(1)));
 
-// 内存采样：30s 采一次，但只在「有变化（≥30MB）或到心跳（5min）」时落一条日志（工作集 / GC 堆分代 / cgroup 上限），
-// 稳态不刷屏，OOMKilled 后仍能靠它回放死亡前的内存曲线；逼近 cgroup 上限时升为 Warning。
+// 内存采样：30s 采一次，只在工作集相对上次落日志的值变化 ≥30MB 时记一条（首条为基线）；
+// 稳态不刷屏，OOMKilled 后仍能靠它回放死亡前的内存曲线。
 builder.Services.Configure<MemorySamplerOptions>(builder.Configuration.GetSection(MemorySamplerOptions.SectionName));
 builder.Services.AddHostedService<MemorySamplerService>();
 

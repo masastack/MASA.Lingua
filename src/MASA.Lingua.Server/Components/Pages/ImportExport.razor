@@ -489,6 +489,10 @@ else
                         Label="各语种最低上线完成度（%）" Hint="0 表示不限制" PersistentHint="true" />
             <MSwitch TValue="bool" @bind-Value="_policyBlockErrors" Label="Error 级问题（占位符 / 长度 / HTML）阻断发布" />
             <MSwitch TValue="bool" @bind-Value="_policyBlockGlossary" Label="术语库违规阻断发布" />
+            <MSwitch TValue="bool" @bind-Value="_policyBlockPathConflicts"
+                      Label="键路径冲突阻断发布"
+                      Hint="项目根裸 key 与同名命名空间共存时，嵌套发布 JSON 只能保留一侧（扁平文件两侧都保留，.NET 客户端按扁平格式下载不受影响）。确认客户端用扁平格式取词的项目可关闭。"
+                      PersistentHint="true" />
         </div>
     </ChildContent>
     <FooterContent>

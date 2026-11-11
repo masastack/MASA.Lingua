@@ -70,7 +70,7 @@ public sealed class LinguaMasaBlazorI18nService(
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private sealed record LinguaManifest(string Project, string Version, List<LinguaManifestCulture> Cultures);
-    private sealed record LinguaManifestCulture(string Culture, string ETag, string Url);
+    private sealed record LinguaManifestCulture(string Culture, string ETag, string Url, string? FlatUrl = null);
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -99,7 +99,8 @@ public sealed class LinguaMasaBlazorI18nService(
 
             foreach (var culture in manifest.Cultures)
             {
-                var url = LinguaProtocol.Combine(endpoint, culture.Url);
+                // 优先扁平格式：Flatten 对嵌套 / 扁平两种形状产出同一份扁平键值表，而扁平文件没有键路径冲突的表达缺陷
+                var url = LinguaProtocol.Combine(endpoint, string.IsNullOrWhiteSpace(culture.FlatUrl) ? culture.Url : culture.FlatUrl);
                 var bundle = await http.GetFromJsonAsync<JsonElement>(url, JsonOptions, timeout.Token);
                 var map = Flatten(bundle);
                 if (map.Count == 0)

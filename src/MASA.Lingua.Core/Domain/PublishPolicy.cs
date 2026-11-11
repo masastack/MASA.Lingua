@@ -36,6 +36,13 @@ public sealed class PublishPolicy
     /// <summary>即将上线的译文违反术语库（品牌词被翻译、标准译法不一致）时是否阻断发布。</summary>
     public bool BlockOnGlossaryViolations { get; set; } = true;
 
+    /// <summary>
+    /// 键路径冲突（如项目根裸 key 与同名命名空间共存：发布 JSON 的同一位置无法既是字符串又是对象）时是否阻断发布。
+    /// 冲突的词条文案在嵌套发布 JSON 里会丢失一侧（扁平文件两侧都保留）；.NET 客户端按扁平格式下载、两侧都能取到，
+    /// 这类项目可以关掉本开关——嵌套文件仍会少一侧内容，但不再拦截发布。
+    /// </summary>
+    public bool BlockOnKeyPathConflicts { get; set; } = true;
+
     public bool Includes(TranslationStatus status) => Content switch
     {
         PublishContentMode.ApprovedOnly => status == TranslationStatus.Approved,

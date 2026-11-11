@@ -1539,6 +1539,16 @@ public partial class Home
         {
             var snapshot = await Publisher.PublishProjectAsync(SelectedProjectCode, "管理后台手动发布");
 
+            // 草稿与线上内容完全一致：发布器没有生成新版本（也不再写发布历史），只提示用户
+            if (snapshot is null)
+            {
+                var hash = _currentProject?.LastPublishedVersionHash;
+                _statusMessage = string.IsNullOrWhiteSpace(hash)
+                    ? "草稿与线上内容一致，没有新内容要发布。"
+                    : $"草稿与线上内容一致，没有新内容要发布，线上版本指纹仍是 {hash}。若刚修改了译文请确认：译文状态是否达到发布策略（草稿 / 待复核不进发布文件），或「导入与发布」页发布前检查里的键路径冲突提示。";
+                return;
+            }
+
             // 发布只会改项目的「最近发布」两个字段，词条与译文都没变：直接用发布结果更新内存里的项目，
             // 不再为刷新一行文字把整棵词条树 + 共享命名空间 + 影响面 + 术语重新拉一遍
             if (_currentProject is { } published && string.Equals(published.Code, SelectedProjectCode, StringComparison.Ordinal))

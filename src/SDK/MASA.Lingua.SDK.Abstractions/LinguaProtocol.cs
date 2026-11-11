@@ -19,6 +19,14 @@ public static class LinguaProtocol
     public static string BundlePath(string projectCode, string culture) =>
         $"/i18n/{Uri.EscapeDataString(projectCode)}/{Uri.EscapeDataString(culture)}.json";
 
+    /// <summary>
+    /// 扁平格式的语言包地址（同一内容的另一种表示）。
+    /// .NET 客户端优先用它：扁平文件按完整 key 存放词条，没有「裸 key 与同名命名空间共用 JSON 位置」
+    /// 的表达缺陷（键路径冲突的项目，被嵌套 JSON 挤掉的那侧文案在扁平文件里照常下发）。
+    /// </summary>
+    public static string FlatBundlePath(string projectCode, string culture) =>
+        $"{BundlePath(projectCode, culture)}?format=flat";
+
     public static string StreamPath(string projectCode) =>
         $"/api/v1/stream?project={Uri.EscapeDataString(projectCode)}";
 

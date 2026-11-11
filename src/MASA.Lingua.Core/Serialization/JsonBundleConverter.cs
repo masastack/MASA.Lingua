@@ -236,4 +236,99 @@ public static class JsonBundleConverter
 
     private static string NormalizeSegment(string segment, string fallback) =>
         string.IsNullOrWhiteSpace(segment) ? fallback : segment.Trim();
+
+    /// <summary>
+    /// 发布 JSON 中的一处键路径冲突：同一个位置（<see cref="JsonPath"/>）既被词条当作「值」占用，
+    /// 又被其他词条当作「父级对象」占用（或被两个不同词条同时当作值——完全重复的路径）。
+    /// 嵌套 JSON 一个属性只能是字符串或对象之一：这类冲突发布时只会保留一侧，另一侧的文案会从发布文件中静默丢失。
+    /// </summary>
+    public sealed record KeyPathConflict(
+        string JsonPath,
+        IReadOnlyList<(string Namespace, string Key)> ValueClaims,
+        IReadOnlyList<(string Namespace, string Key)> BranchClaims);
+
+    /// <summary>
+    /// 检测词条集合在嵌套发布 JSON 中的键路径冲突，判定规则与 <see cref="ToNestedJsonUtf8Bytes"/> 的建树逻辑完全一致：
+    /// 根命名空间（空命名空间）的 key 直接成为 JSON 根级属性，非空命名空间成为一层对象；
+    /// key 里允许出现点（导入的扁平 key），与命名空间段拼接后逐级建树。
+    /// <para>
+    /// 典型冲突：词条「Confirm」（项目根）与命名空间「Confirm」——发布 JSON 的 "Confirm" 位置
+    /// 无法既是字符串又是对象。该检测让这种「静默丢内容」在发布门禁处显式暴露，而不是发布后悄悄消失。
+    /// </para>
+    /// <para>传入的词条必须先按发布口径合并（同 (Namespace, Key) 去重，如共享层被项目层覆盖），
+    /// 检测结果与实际发布内容的冲突情况一致。同 (Namespace, Key) 的重复项不会被误报为冲突。</para>
+    /// </summary>
+    public static IReadOnlyList<KeyPathConflict> DetectPathConflicts(IEnumerable<(string Namespace, string Key)> entries)
+    {
+        var root = new ConflictNode();
+        var seen = new HashSet<(string Namespace, string Key)>();
+        foreach (var entry in entries)
+        {
+            // 同 (Namespace, Key) 只算一条（发布前已按图层合并去重；这里再兜一层，重复输入不会误报为冲突）
+            if (!seen.Add(entry))
+            {
+                continue;
+            }
+
+            // 与 ToNestedJsonUtf8Bytes 相同的路径计算与分段规则（空命名空间不带点拼接）
+            var fullPath = string.IsNullOrWhiteSpace(entry.Namespace)
+                ? entry.Key
+                : $"{entry.Namespace}.{entry.Key.Replace(':', '.')}";
+            var segments = fullPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (segments.Length == 0)
+            {
+                continue;
+            }
+
+            var current = root;
+            foreach (var segment in segments[..^1])
+            {
+                current = current.Descend(segment);
+                current.ParentClaims.Add(entry);
+            }
+
+            current.Descend(segments[^1]).ValueClaims.Add(entry);
+        }
+
+        var conflicts = new List<KeyPathConflict>();
+        CollectConflicts(root, "", conflicts);
+        return conflicts;
+    }
+
+    private sealed class ConflictNode
+    {
+        public Dictionary<string, ConflictNode> Children { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>把这个位置当作「值」的词条（路径终点落在这里）。</summary>
+        public List<(string Namespace, string Key)> ValueClaims { get; } = [];
+
+        /// <summary>路径经过这里、要求这个位置是「父级对象」的词条。</summary>
+        public List<(string Namespace, string Key)> ParentClaims { get; } = [];
+
+        public ConflictNode Descend(string segment)
+        {
+            if (!Children.TryGetValue(segment, out var child))
+            {
+                Children[segment] = child = new ConflictNode();
+            }
+
+            return child;
+        }
+    }
+
+    private static void CollectConflicts(ConflictNode node, string path, List<KeyPathConflict> conflicts)
+    {
+        foreach (var (segment, child) in node.Children)
+        {
+            var childPath = path.Length == 0 ? segment : $"{path}.{segment}";
+            // 冲突判定：同一位置有两个以上的「值」占用（完全重复路径），或既是「值」又是「父级对象」
+            if (child.ValueClaims.Count > 1 ||
+                (child.ValueClaims.Count > 0 && child.ParentClaims.Count > 0))
+            {
+                conflicts.Add(new KeyPathConflict(childPath, child.ValueClaims, child.ParentClaims));
+            }
+
+            CollectConflicts(child, childPath, conflicts);
+        }
+    }
 }

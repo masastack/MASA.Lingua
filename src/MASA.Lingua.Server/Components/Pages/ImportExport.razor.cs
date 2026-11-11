@@ -370,6 +370,7 @@ public partial class ImportExport
     private int _policyMinCoverage;
     private bool _policyBlockErrors = true;
     private bool _policyBlockGlossary = true;
+    private bool _policyBlockPathConflicts = true;
 
     private static string ContentModeLabel(PublishContentMode mode) => mode switch
     {
@@ -444,6 +445,7 @@ public partial class ImportExport
                 _policyMinCoverage = policy.MinCoveragePercent;
                 _policyBlockErrors = policy.BlockOnErrors;
                 _policyBlockGlossary = policy.BlockOnGlossaryViolations;
+                _policyBlockPathConflicts = policy.BlockOnKeyPathConflicts;
             }
         }
         finally
@@ -526,7 +528,8 @@ public partial class ImportExport
                 Content = _policyContent,
                 MinCoveragePercent = _policyMinCoverage,
                 BlockOnErrors = _policyBlockErrors,
-                BlockOnGlossaryViolations = _policyBlockGlossary
+                BlockOnGlossaryViolations = _policyBlockGlossary,
+                BlockOnKeyPathConflicts = _policyBlockPathConflicts
             });
             await ReloadAsync(resetCultures: false, policyOnly: true);
             _policyDrawer = false;
@@ -552,6 +555,19 @@ public partial class ImportExport
             var snapshot = await Publisher.PublishProjectAsync(
                 project.Code,
                 new PublishRequest("管理后台发布", _forcePublish, _forceReason));
+
+            // 草稿与线上内容完全一致：没有生成新版本（也没写发布历史），线上产物与检查结果都没变，不刷新
+            if (snapshot is null)
+            {
+                _forcePublish = false;
+                _forceReason = "";
+                var hash = project.LastPublishedVersionHash;
+                _statusMessage = string.IsNullOrWhiteSpace(hash)
+                    ? $"「{project.Code}」草稿与线上内容一致，没有新内容要发布。"
+                    : $"「{project.Code}」草稿与线上内容一致，没有新内容要发布，线上版本指纹仍是 {hash}。";
+                return;
+            }
+
             _statusMessage = snapshot.Forced
                 ? $"已强制发布「{project.Code}」，版本指纹 {snapshot.VersionHash}，原因已记录。"
                 : $"已发布「{project.Code}」，版本指纹 {snapshot.VersionHash}。";

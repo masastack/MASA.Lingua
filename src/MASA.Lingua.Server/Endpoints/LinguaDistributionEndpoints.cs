@@ -427,8 +427,11 @@ public static class LinguaDistributionEndpoints
 
         bool isFlat = string.Equals(format, "flat", StringComparison.OrdinalIgnoreCase);
 
-        // 嵌套与扁平是同一内容的两种表示，ETag 必须不同，否则缓存会把一种格式当成另一种返回
-        var etag = isFlat ? bundle.ETag.TrimEnd('"') + "-flat\"" : bundle.ETag;
+        // 两种格式刻意返回同一个 ETag（由同时覆盖嵌套 / 扁平字节的内容指纹派生）：
+        // SDK 用 manifest / SSE 事件里的 ETag 与下载响应的 ETag 对账，且 .NET 客户端按扁平格式下载、
+        // 嵌套 / 扁平共一个 ETag 才能互相衔接（否则任一格式变更都会让另一格式的对账永远不命中）。
+        // HTTP 缓存按完整 URL（含 format 查询参数）分条目，不会把两种格式混进同一个缓存条目。
+        var etag = bundle.ETag;
         httpContext.Response.Headers.ETag = etag;
         // 一律 no-cache（每次用前必须用 ETag 重新校验）：1024 字节的 304 很便宜，
         // 换来「发布完成 = 客户端下次请求立即看到新文案」，不再有 max-age/SWR 造成的旧内容窗口。

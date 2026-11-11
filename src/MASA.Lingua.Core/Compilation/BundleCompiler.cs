@@ -70,8 +70,16 @@ public sealed class BundleCompiler
         IReadOnlyList<(string Namespace, string Key, string Value)> tuples)
     {
         byte[] flatBytes = JsonBundleConverter.ToFlatJsonUtf8Bytes(tuples, '.');
-        string hash = Convert.ToHexString(SHA256.HashData(nestedBytes)).ToLowerInvariant()[..16];
-        string etag = $"\"lingua-{hash}\"";
+        string nestedHash = Convert.ToHexString(SHA256.HashData(nestedBytes)).ToLowerInvariant()[..16];
+        string flatHash = Convert.ToHexString(SHA256.HashData(flatBytes)).ToLowerInvariant()[..16];
+
+        // 内容指纹必须同时覆盖两种对外表示：嵌套 JSON 无法表达「裸 key 与同名命名空间共存」（键路径冲突），
+        // 这种词条的文案只在扁平文件里出现——只算嵌套字节时，改了译值指纹与 ETag 依然纹丝不动，
+        // 客户端（按 ETag / 版本对账）就永远收不到更新。两种字节一起取哈希，任一表示变化指纹都变化。
+        string contentHash = Convert.ToHexString(
+                SHA256.HashData(System.Text.Encoding.UTF8.GetBytes($"{nestedHash}:{flatHash}")))
+            .ToLowerInvariant()[..16];
+        string etag = $"\"lingua-{contentHash}\"";
 
         var lookup = JsonBundleConverter.FlattenToLookupDictionary(nestedBytes)
             .ToFrozenDictionary(StringComparer.Ordinal);
@@ -80,7 +88,7 @@ public sealed class BundleCompiler
             projectCode,
             culture,
             etag,
-            hash,
+            contentHash,
             nestedBytes,
             flatBytes,
             lookup);

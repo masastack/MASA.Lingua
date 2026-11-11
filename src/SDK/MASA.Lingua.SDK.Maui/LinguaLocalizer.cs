@@ -245,7 +245,9 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
                     await gate.WaitAsync(ct);
                     try
                     {
-                        using var cultureRes = await _http.SendAsync(NewRequest(LinguaProtocol.Combine(endpoint, c.Url)), ct);
+                        // .NET 客户端优先下载扁平格式：没有键路径冲突的表达缺陷，拍平后的查询 key 与嵌套格式完全一致
+                        using var cultureRes = await _http.SendAsync(
+                            NewRequest(LinguaProtocol.Combine(endpoint, string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl)), ct);
                         cultureRes.EnsureSuccessStatusCode();
                         var bytes = await cultureRes.Content.ReadAsByteArrayAsync(ct);
 

@@ -114,7 +114,8 @@ public sealed class LinguaJsonSyncService(
             .ToList();
 
         var changed = await DownloadCulturesAsync(
-            entries.Select(c => (c.Culture, c.ETag, (string?)c.Url)).ToList(),
+            // .NET 客户端优先下载扁平格式：没有键路径冲突的表达缺陷，两种表示拍平后的查询 key 完全一致
+            entries.Select(c => (c.Culture, c.ETag, string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl)).ToList(),
             client,
             ct);
 
@@ -374,9 +375,9 @@ public sealed class LinguaJsonSyncService(
             .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        // 事件的 ETag 就是分发端点的强 ETag；URL 用固定规则拼，不依赖 manifest
+        // 事件的 ETag 就是分发端点的强 ETag；URL 用固定规则拼（优先扁平格式），不依赖 manifest
         var targets = entries
-            .Select(c => (c.Culture, c.ETag, (string?)LinguaProtocol.BundlePath(_options.ProjectCode, c.Culture)))
+            .Select(c => (c.Culture, c.ETag, (string?)LinguaProtocol.FlatBundlePath(_options.ProjectCode, c.Culture)))
             .ToList();
 
         await DownloadCulturesAsync(targets, client, ct);

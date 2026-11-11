@@ -195,14 +195,19 @@ public sealed class StaticBundlePublisher(
     // 发布 / 回滚
     // ------------------------------------------------------------------
 
-    public Task<PublishSnapshot> PublishProjectAsync(
+    public Task<PublishSnapshot?> PublishProjectAsync(
         string projectCode,
         string? releaseNote = null,
         CancellationToken ct = default) =>
         PublishProjectAsync(projectCode, new PublishRequest(releaseNote), ct);
 
+    /// <summary>
+    /// 发布草稿内容并返回新版本快照。
+    /// 草稿编译产物与线上版本内容完全一致（版本指纹相同）时<b>不生成新版本</b>：返回 null 表示「没有新内容要发布」，
+    /// 由调用方给出对应提示——重复发布会把发布历史灌满指纹相同的记录，也让「发布成功」的反馈失真。
+    /// </summary>
     /// <exception cref="PublishBlockedException">未通过门禁，且没有强制发布（或强制发布没有填写原因）。</exception>
-    public async Task<PublishSnapshot> PublishProjectAsync(
+    public async Task<PublishSnapshot?> PublishProjectAsync(
         string projectCode,
         PublishRequest request,
         CancellationToken ct = default)
@@ -240,6 +245,20 @@ public sealed class StaticBundlePublisher(
                 var layers = TranslationLayerBuilder.Build(
                     project, source.SharedNamespaces, culture, project.PublishPolicy.Content);
                 bundles.Add(compiler.Compile(projectCode, culture, layers));
+            }
+
+            var versionHash = BundleCompiler.ComputeVersionHash(bundles.Select(b => (b.Culture, b.ContentHash)));
+
+            // 草稿与线上内容完全一致（指纹逐字符相同）：不生成新版本，只把磁盘与内存按本次产物校准一遍
+            // （文件丢失 / 缓存未热时顺手补回），不落快照、不广播、不写发布历史。
+            // 强制发布同样跳过——没有内容差异可强发，强制原因记录了也只指向一个不存在的版本。
+            if (string.Equals(project.LastPublishedVersionHash, versionHash, StringComparison.Ordinal))
+            {
+                await MaterializeLiveArtifactsAsync(project, bundles, ct);
+                logger.LogInformation(
+                    "项目 {ProjectCode} 草稿与线上内容一致（版本指纹 {VersionHash}），本次发布未生成新版本。",
+                    projectCode, versionHash);
+                return null;
             }
 
             return await ApplyReleaseAsync(
@@ -318,29 +337,11 @@ public sealed class StaticBundlePublisher(
         CancellationToken ct)
     {
         var projectCode = project.Code;
-        var projectStaticDir = Path.Combine(ResolveBundleDirectory(), projectCode);
-        Directory.CreateDirectory(projectStaticDir);
 
-        // 1. 原子写入固定名物理文件 App_Data/i18n/{project}/{culture}.json
-        foreach (var bundle in bundles)
-        {
-            await WriteAtomicAsync(Path.Combine(projectStaticDir, $"{bundle.Culture}.json"), bundle.NestedJsonUtf8Bytes, ct);
-        }
+        // 1. 物化产物：原子写固定名物理文件 + 整体换入内存缓存（发布 / 回滚 / 无变化发布共用）
+        await MaterializeLiveArtifactsAsync(project, bundles, ct);
 
         var versionHash = BundleCompiler.ComputeVersionHash(bundles.Select(b => (b.Culture, b.ContentHash)));
-
-        // 2. 全部语种写完后，一次性换入内存缓存（先覆盖再清理，读者不会撞上空窗期）
-        foreach (var bundle in bundles)
-        {
-            _memoryCache[(projectCode, bundle.Culture)] = bundle;
-        }
-
-        var live = bundles.Select(b => b.Culture).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var key in _memoryCache.Keys.Where(k =>
-                     string.Equals(k.Project, projectCode, StringComparison.Ordinal) && !live.Contains(k.Culture)).ToList())
-        {
-            _memoryCache.TryRemove(key, out _);
-        }
 
         var snapshot = new PublishSnapshot
         {
@@ -379,6 +380,38 @@ public sealed class StaticBundlePublisher(
         // 返回给调用方的快照不带大字段
         snapshot.Content = null;
         return snapshot;
+    }
+
+    /// <summary>
+    /// 把编译产物物化为线上版本：原子写固定名物理文件 App_Data/i18n/{project}/{culture}.json，
+    /// 全部语种写完后一次性换入内存缓存（先覆盖再清理下线语种，读者不会撞上空窗期）。
+    /// 发布 / 回滚 / 「无变化发布」共用——无变化时也执行一遍，磁盘文件丢失或缓存未热可以顺手补回。
+    /// </summary>
+    private async Task MaterializeLiveArtifactsAsync(
+        Project project,
+        IReadOnlyList<CompiledBundle> bundles,
+        CancellationToken ct)
+    {
+        var projectCode = project.Code;
+        var projectStaticDir = Path.Combine(ResolveBundleDirectory(), projectCode);
+        Directory.CreateDirectory(projectStaticDir);
+
+        foreach (var bundle in bundles)
+        {
+            await WriteAtomicAsync(Path.Combine(projectStaticDir, $"{bundle.Culture}.json"), bundle.NestedJsonUtf8Bytes, ct);
+        }
+
+        foreach (var bundle in bundles)
+        {
+            _memoryCache[(projectCode, bundle.Culture)] = bundle;
+        }
+
+        var live = bundles.Select(b => b.Culture).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in _memoryCache.Keys.Where(k =>
+                     string.Equals(k.Project, projectCode, StringComparison.Ordinal) && !live.Contains(k.Culture)).ToList())
+        {
+            _memoryCache.TryRemove(key, out _);
+        }
     }
 
     private static async Task WriteAtomicAsync(string finalPath, ReadOnlyMemory<byte> bytes, CancellationToken ct)
@@ -649,13 +682,15 @@ public sealed class StaticBundlePublisher(
         var cultures = bundles.Select(b =>
         {
             stats.TryGetValue(b.Culture, out var s);
+            var url = $"/i18n/{projectCode}/{b.Culture}.json";
             return new ManifestCulture(
                 b.Culture,
                 LinguaCultures.GetName(b.Culture),
-                $"/i18n/{projectCode}/{b.Culture}.json",
+                url,
                 b.ETag,
                 s.Entries,
-                s.Completion);
+                s.Completion,
+                $"{url}?format=flat");
         }).ToList();
 
         return new ProjectManifest(

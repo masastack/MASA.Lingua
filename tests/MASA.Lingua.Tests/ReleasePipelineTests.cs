@@ -3,6 +3,7 @@ using MASA.Lingua.Core.Abstractions;
 using MASA.Lingua.Core.Compilation;
 using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Publishing;
+using MASA.Lingua.Core.Serialization;
 using MASA.Lingua.Server.Options;
 using MASA.Lingua.Server.Services;
 using MASA.Lingua.Storage.EfCore;
@@ -360,5 +361,168 @@ public sealed class ReleasePipelineTests
 
         var neverPublished = BundleDiff.Compare(default, draft, hasPublished: false);
         Assert.Equal(3, neverPublished.Added);
+    }
+
+    // ---------------------------------------------------------------------
+    // 键路径冲突：根裸 key 与同名命名空间在嵌套发布 JSON 中共占一个位置。
+    // 真实案例（pinbar）：项目根的裸 key「Confirm」与命名空间「Confirm」并存——
+    // 裸 key 的文案从 11-04 导入起就从未进入过任何发布产物，编辑它再发布指纹纹丝不动。
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public async Task PublishGate_Should_Block_Key_Path_Conflicts_Between_Root_Key_And_Namespace()
+    {
+        using var h = await CreateHarnessAsync();
+        var publisher = h.NewPublisher();
+        await publisher.EnsurePublishedAsync("shop-vue");
+
+        // pinbar 的实际形状：项目根的裸 key 与同名命名空间共存于一个项目
+        await h.Repo.UpsertEntryAsync("shop-vue", "", "Confirm", "确认", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "确认", ["en-US"] = "Confirm" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+        await h.Repo.UpsertEntryAsync("shop-vue", "Confirm", "Title", "确认标题", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "确认标题", ["en-US"] = "Confirm Title" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+
+        var report = await publisher.CheckProjectAsync("shop-vue");
+        Assert.False(report.CanPublish);
+        var blocker = Assert.Single(report.Blockers, b => b.Code == PublishChecker.PathConflictCode);
+        Assert.Contains("Confirm", blocker.Message);
+        Assert.Contains("项目根/Confirm", blocker.Message);
+
+        // 不带强制发布：拦截
+        await Assert.ThrowsAsync<PublishBlockedException>(
+            () => publisher.PublishProjectAsync("shop-vue", "x"));
+
+        // 强制发布（留痕）可越过门禁：嵌套 JSON 保留命名空间对象，根词条的值被挤掉——断言与真实产物行为一致
+        var snapshot = await publisher.PublishProjectAsync(
+            "shop-vue", new PublishRequest("冲突知情发布", Force: true, ForceReason: "根 Confirm 词条即将停用"));
+        Assert.True(snapshot.Forced);
+
+        var en = await publisher.GetOrCompileBundleAsync("shop-vue", "en-US");
+        Assert.NotNull(en);
+        Assert.Equal("Confirm Title", en!.LookupEntries["Confirm.Title"]);
+        Assert.False(en.LookupEntries.ContainsKey("Confirm"));
+    }
+
+    [Fact]
+    public void DetectPathConflicts_Should_Find_Shadowing_And_Duplicates_Without_False_Positives()    {
+        // 根裸 key 与同名命名空间（pinbar 实际形状）
+        var conflicts = JsonBundleConverter.DetectPathConflicts(
+            [("", "Confirm"), ("Confirm", "Content"), ("Confirm", "Title")]);
+        var conflict = Assert.Single(conflicts);
+        Assert.Equal("Confirm", conflict.JsonPath);
+        Assert.Equal(("", "Confirm"), Assert.Single(conflict.ValueClaims));
+        Assert.Equal(2, conflict.BranchClaims.Count);
+
+        // 完全重复的路径：点分 key 与「命名空间 + key」拼出同一条 JSON 路径
+        conflicts = JsonBundleConverter.DetectPathConflicts([("A", "B"), ("", "A.B")]);
+        conflict = Assert.Single(conflicts);
+        Assert.Equal("A.B", conflict.JsonPath);
+        Assert.Equal(2, conflict.ValueClaims.Count);
+        Assert.Empty(conflict.BranchClaims);
+
+        // 根 key「A」挡住另一个根 key「A.B」的父级位置
+        conflicts = JsonBundleConverter.DetectPathConflicts([("", "A"), ("", "A.B")]);
+        conflict = Assert.Single(conflicts);
+        Assert.Equal("A", conflict.JsonPath);
+
+        // 正常结构不误报：同 (命名空间, Key)（共享层被项目层覆盖，上游去重后只剩一条）、
+        // 普通命名空间词条、项目根裸 key、互不相干的点分 key
+        Assert.Empty(JsonBundleConverter.DetectPathConflicts(
+            [("common", "ok"), ("common", "ok"), ("order", "submitBtn"), ("", "UserNotExist")]));
+        Assert.Empty(JsonBundleConverter.DetectPathConflicts([("A", "B.C"), ("X", "Y")]));
+    }
+
+    [Fact]
+    public async Task Publish_Without_Content_Changes_Should_Not_Create_New_Version()
+    {
+        using var h = await CreateHarnessAsync();
+        var publisher = h.NewPublisher();
+
+        var first = await publisher.PublishProjectAsync("shop-vue", "v1");
+        Assert.NotNull(first);
+
+        // 没有任何改动再次发布：不生成新版本（返回 null），也不新增发布历史——
+        // 否则同一指纹的发布会把历史灌满重复记录，还让「发布成功」的反馈失真
+        Assert.Null(await publisher.PublishProjectAsync("shop-vue", "v2-noop"));
+
+        var history = await h.Repo.GetPublishSnapshotsAsync("shop-vue");
+        Assert.Single(history);
+        Assert.Equal(first!.VersionHash, (await h.Repo.GetProjectByCodeAsync("shop-vue"))!.LastPublishedVersionHash);
+
+        // 草稿有真实改动后恢复生成新版本
+        await Upsert(h.Repo, "laterKey", "后续改动", "Later change", TranslationStatus.Approved);
+        var second = await publisher.PublishProjectAsync("shop-vue", "v3");
+        Assert.NotNull(second);
+        Assert.NotEqual(first.VersionHash, second!.VersionHash);
+    }
+
+    /// <summary>
+    /// 用户实测场景（pinbar）的回归锁：项目根裸 key 与同名命名空间冲突时，
+    /// 嵌套 JSON 只保留命名空间一侧——但裸 key 的文案在扁平文件里照常存在。
+    /// 只改被嵌套挤掉的那一侧时，嵌套字节不变、扁平字节变化，版本指纹必须变化；
+    /// 且 manifest 的嵌套地址保持不变、另带扁平地址供 .NET 客户端下载。
+    /// </summary>
+    [Fact]
+    public async Task Fingerprint_Should_Change_When_Only_The_Flat_Side_Of_A_Path_Conflict_Changes()
+    {
+        using var h = await CreateHarnessAsync();
+        var publisher = h.NewPublisher();
+        await publisher.EnsurePublishedAsync("shop-vue");
+
+        await h.Repo.UpsertEntryAsync("shop-vue", "", "Confirm", "确认", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "确认", ["en-US"] = "Confirm" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+        await h.Repo.UpsertEntryAsync("shop-vue", "Confirm", "Title", "标题", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "标题", ["en-US"] = "Title" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+
+        var v1 = await publisher.PublishProjectAsync("shop-vue",
+            new PublishRequest("v1", Force: true, ForceReason: "冲突知情发布"));
+        Assert.NotNull(v1);
+
+        // 只改嵌套表示里被挤掉的裸 key 译值：嵌套字节不变，指纹（同时覆盖嵌套 + 扁平两种字节）必须变化
+        await h.Repo.UpsertEntryAsync("shop-vue", "", "Confirm", "确认", null, null,
+            new Dictionary<string, string> { ["en-US"] = "Confirm New" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+        var v2 = await publisher.PublishProjectAsync("shop-vue",
+            new PublishRequest("v2", Force: true, ForceReason: "冲突知情发布"));
+        Assert.NotNull(v2);
+        Assert.NotEqual(v1!.VersionHash, v2!.VersionHash);
+
+        // 扁平文件两侧都保留：裸 key 的新文案与命名空间词条并存（.NET 客户端按扁平格式下载，两侧取词都正常）
+        var flat = Encoding.UTF8.GetString(
+            (await publisher.GetOrCompileBundleAsync("shop-vue", "en-US"))!.FlatJsonUtf8Bytes.Span);
+        Assert.Contains("\"Confirm\": \"Confirm New\"", flat);
+        Assert.Contains("\"Confirm.Title\": \"Title\"", flat);
+
+        // manifest：嵌套地址保持原样（Vue 等嵌套消费方不受影响），另带扁平地址
+        var manifest = await publisher.GetManifestAsync("shop-vue");
+        Assert.NotNull(manifest);
+        var en = Assert.Single(manifest!.Cultures, c => c.Culture == "en-US");
+        Assert.EndsWith("/i18n/shop-vue/en-US.json", en.Url);
+        Assert.EndsWith("/i18n/shop-vue/en-US.json?format=flat", en.FlatUrl);
+    }
+
+    [Fact]
+    public async Task PublishGate_Should_Allow_Disabling_Key_Path_Conflict_Blocking()
+    {
+        using var h = await CreateHarnessAsync();
+        var publisher = h.NewPublisher();
+        await publisher.EnsurePublishedAsync("shop-vue");
+
+        await h.Repo.UpsertEntryAsync("shop-vue", "", "Confirm", "确认", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "确认", ["en-US"] = "Confirm" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+        await h.Repo.UpsertEntryAsync("shop-vue", "Confirm", "Title", "标题", null, null,
+            new Dictionary<string, string> { ["zh-CN"] = "标题", ["en-US"] = "Title" },
+            status: TranslationStatus.Approved, acknowledgeIssues: true);
+
+        // 客户端按扁平格式取词的项目（两侧文案都能拿到）可以关掉冲突阻断：无需强制发布即可正常发布
+        await h.Repo.SavePublishPolicyAsync("shop-vue", new PublishPolicy { BlockOnKeyPathConflicts = false });
+        Assert.True((await publisher.CheckProjectAsync("shop-vue")).CanPublish);
+        var snapshot = await publisher.PublishProjectAsync("shop-vue", "v1");
+        Assert.NotNull(snapshot);
     }
 }
