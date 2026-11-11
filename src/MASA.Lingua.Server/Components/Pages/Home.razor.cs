@@ -16,7 +16,7 @@ public partial class Home
 {
     private enum MatrixView { Entries, Report }
 
-    private sealed record LegendItem(string Css, string Label, int Count);
+    private sealed record LegendItem(string Label, int Count);
 
     /// <summary>
     /// 数据加载超过这个毫秒数按异常慢处理，升为 Warning（常规加载是 Debug，默认日志不刷屏）。
@@ -323,20 +323,18 @@ public partial class Home
     /// <summary>词条所属的仓储作用域：共享词条走 <c>__shared__</c>，其余走当前项目。</summary>
     private string ScopeOf(TranslationEntry entry) => IsSharedEntry(entry) ? WorkspaceScope.Shared : SelectedProjectCode;
 
-    private IEnumerable<LegendItem> LegendItems
-    {
-        get
-        {
-            var all = new[]
-            {
-                new LegendItem("approved", "已审核", _coverage.Sum(c => c.Approved)),
-                new LegendItem("ai", "AI 已译", _coverage.Sum(c => c.Ai)),
-                new LegendItem("review", "待复核", _coverage.Sum(c => c.Review)),
-                new LegendItem("missing", "缺失", _coverage.Sum(c => c.Missing)),
-            };
-            return all.Where(i => i.Count > 0);
-        }
-    }
+    /// <summary>
+    /// 完成度指标条的四个格子。**零值也保留**：一个真实的 0 必须显示为 0，
+    /// 而不是让这一格消失（消失会让「待复核 0」看起来像「这个指标不存在」，
+    /// 也会让剩下的格子被拉伸到整行宽）。
+    /// </summary>
+    private IReadOnlyList<LegendItem> LegendItems =>
+    [
+        new LegendItem("已审核", _coverage.Sum(c => c.Approved)),
+        new LegendItem("AI 已译", _coverage.Sum(c => c.Ai)),
+        new LegendItem("待复核", _coverage.Sum(c => c.Review)),
+        new LegendItem("缺失", _coverage.Sum(c => c.Missing)),
+    ];
 
     protected override async Task OnInitializedAsync()
     {
@@ -530,7 +528,8 @@ public partial class Home
             return;
         }
 
-        // 与 CopyVersionHashAsync 同理：剪贴板异常不能炸电路
+        // 与版本指纹的复制同理：剪贴板异常不能炸电路（版本指纹现由 PCopyableText 组件接管，
+        // 它内部也走同一套 navigator.clipboard 调用，异常同样只会让按钮无效而不断电路）。
         try
         {
             await JS.InvokeVoidAsync("navigator.clipboard.writeText", key);
@@ -760,29 +759,6 @@ public partial class Home
         finally
         {
             _cultureBusy = false;
-        }
-    }
-
-    /// <summary>复制完整版本指纹：核对线上产物与草稿是否一致时要用整串逐字符比对。</summary>
-    private async Task CopyVersionHashAsync()
-    {
-        if (CurrentProject?.LastPublishedVersionHash is not { Length: > 0 } hash)
-        {
-            return;
-        }
-
-        // 剪贴板 API 在文档无焦点 / 浏览器拒绝授权时会抛 JS 异常（NotAllowedError）：
-        // 不接住会顺着事件回调把整个 Blazor 电路炸掉（页面白屏、必须手动刷新）。
-        try
-        {
-            await JS.InvokeVoidAsync("navigator.clipboard.writeText", hash);
-            _statusMessage = "版本指纹已复制到剪贴板。";
-            _statusIsError = false;
-        }
-        catch (JSException)
-        {
-            _statusMessage = "复制失败：浏览器未授权剪贴板或页面失去焦点，请手动选中版本指纹复制。";
-            _statusIsError = true;
         }
     }
 

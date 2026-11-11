@@ -10,7 +10,7 @@
    或者延迟草稿导致「Enter 保存」读到旧文本——矩阵一页上百格，这正是要避免的开销与语义破坏。 *@
 @implements IDisposable
 <tr>
-    <td class="key" data-label="词条">
+    <td data-label="词条">
         <code>
             @if (!string.IsNullOrEmpty(Entry.NamespaceCode))
             {
@@ -20,19 +20,19 @@
         </code>
         @if (!IsSharedScope && Impact is { InheritingProjects: > 0 } impact)
         {
-            <MChip XSmall Class="mt-1" title="@InheritedTitle">
+            <MChip Small Class="mt-1" title="@InheritedTitle">
                 共享 · @(impact.InheritingProjects) 个项目继承@(impact.OverridingProjects > 0 ? $"、{impact.OverridingProjects} 个已覆盖" : "")
             </MChip>
         }
         else if (IsSharedScope && Impact is { InheritingProjects: > 0 } sharedImpact)
         {
-            <MChip XSmall Color="Warning" Class="mt-1" title="@SharedImpactTitle">
+            <MChip Small Color="Warning" Class="mt-1" title="@SharedImpactTitle">
                 被 @(sharedImpact.InheritingProjects) 个项目继承、@(sharedImpact.OverridingProjects) 个项目已覆盖
             </MChip>
         }
         @if (Entry.IsAutoReported)
         {
-            <MChip XSmall Color="Warning" Class="mt-1" title="由业务端运行时发现缺失后自动上报创建">自动上报</MChip>
+            <MChip Small Color="Warning" Class="mt-1" title="由业务端运行时发现缺失后自动上报创建">自动上报</MChip>
         }
         <div class="ctx-inline">
             <input class="cell-input ctx-input"
@@ -43,7 +43,7 @@
                    @onchange="@(e => OnContextEdited.InvokeAsync(e.Value?.ToString()))" />
             @if (Entry.MaxLength.HasValue)
             {
-                <MChip XSmall Class="ml-1">长度 ≤ @Entry.MaxLength</MChip>
+                <MChip Small Class="ml-1">长度 ≤ @Entry.MaxLength</MChip>
             }
         </div>
     </td>
@@ -76,49 +76,54 @@
                        @onkeydown="@(e => OnCellKeyDownAsync(culture, e))" />
                 @if (dirty)
                 {
-                    <div class="cell-actions d-flex flex-wrap align-center" style="gap:6px" role="group" aria-label="@($"{culture} 未保存的修改")">
-                        <span class="text-caption">未保存</span>
-                        <MButton XSmall Color="Primary" Disabled="@Busy" OnClick="@(() => SaveCellAsync(culture))">保存</MButton>
-                        <MButton XSmall Disabled="@Busy" OnClick="@(() => RevertCell(culture))">撤销</MButton>
+                    <div class="cell-actions d-flex flex-wrap align-center" role="group" aria-label="@($"{culture} 未保存的修改")">
+                        <span class="text-caption text--secondary mr-2">未保存</span>
+                        <MButton Small Color="Primary" Disabled="@Busy" OnClick="@(() => SaveCellAsync(culture))">保存</MButton>
+                        <MButton Small Class="ml-2" Disabled="@Busy" OnClick="@(() => RevertCell(culture))">撤销</MButton>
                         @if (overwritingApproved)
                         {
-                            <span class="text-caption warning--text" title="保存后这格译文会重新标记为已审核，原来的人工审核内容被替换">将覆盖已审核译文</span>
+                            <span class="text-caption text--secondary ml-2" title="保存后这格译文会重新标记为已审核，原来的人工审核内容被替换">将覆盖已审核译文</span>
                         }
                     </div>
                 }
                 @if (needsReview || stale || notes.Count > 0)
                 {
-                    <div class="cell-notes d-flex flex-wrap align-center" style="gap:4px 8px">
+                    <div class="cell-notes d-flex flex-wrap align-center">
                         @if (needsReview)
                         {
-                            <MChip XSmall Color="Warning" title="@ReviewHint(tr?.ReviewComment)">待复核</MChip>
+                            <MChip Small Color="Warning" Class="mr-1 mb-1" title="@ReviewHint(tr?.ReviewComment)">待复核</MChip>
                         }
                         @if (stale)
                         {
-                            <MChip XSmall Color="Warning" title="这条译文是基于旧的源文案翻译的，重新确认或修改后会清除该标记">源文案已变更</MChip>
+                            <MChip Small Color="Warning" Class="mr-1 mb-1" title="这条译文是基于旧的源文案翻译的，重新确认或修改后会清除该标记">源文案已变更</MChip>
                         }
                         @if (needsReview || stale)
                         {
-                            <MButton XSmall Outlined
+                            <MButton Small Outlined
                                      Disabled="@Busy"
                                      title="确认无误：保留现译文，恢复为已审核并清除标记；需修改则直接编辑单元格"
                                      OnClick="@(() => OnTranslationEdited.InvokeAsync(new CellEdit(culture, currentText)))">
                                 确认
                             </MButton>
                         }
+                        @* 校验备注：级别只能靠语义色表达，而 Masa 没有 error--text / warning--text，
+                           所以用 MChip 的 Color（映射到 --m-theme-error / --m-theme-warning）。 *@
                         @foreach (var note in notes)
                         {
-                            <span class="text-caption @(note.Severity == IssueSeverity.Error ? "error--text" : "warning--text")" title="@note.RuleCode">@note.Message</span>
+                            <MChip Small Class="mr-1 mb-1"
+                                   Color="@(note.Severity == IssueSeverity.Error ? "Error" : "Warning")"
+                                   title="@note.RuleCode">@note.Message</MChip>
                         }
                     </div>
                 }
             </div>
         </td>
     }
-    <td class="act ai-col" data-label="AI 翻译">
-        @if (TargetCultures.Count > 0)
-        {
-            var pendingCultures = EntryMatrix.PendingAiCultures(Entry, TargetCultures);
+    <td class="ai-col" data-label="AI 翻译">
+        @{
+            var pendingCultures = TargetCultures.Count > 0
+                ? EntryMatrix.PendingAiCultures(Entry, TargetCultures)
+                : [];
             var approvedCultures = EntryMatrix.ApprovedCultures(Entry, TargetCultures);
             var busyLabel = Ai switch
             {
@@ -126,42 +131,68 @@
                 AiState.Retranslating => "AI 重新翻译中…",
                 _ => null
             };
-            if (busyLabel is not null)
-            {
-                <div class="d-flex align-center" style="gap:8px" Role="status">
-                    <MProgressCircular Indeterminate Size="16" Width="2" />
-                    <span class="text-caption">@busyLabel</span>
-                </div>
-            }
-            else
-            {
-                <div class="d-flex flex-column" style="gap:6px">
-                    <MButton XSmall Outlined
-                             Disabled="@(Busy || pendingCultures.Count == 0)"
-                             title="@(pendingCultures.Count == 0 ? "这条词条各语种译文都已就绪，没有缺失、草稿或待复核的内容" : "只翻译缺失、草稿与待复核的语种；已审核与 AI 已通过的译文不会被覆盖")"
-                             OnClick="@(() => OnRequestAi.InvokeAsync(false))">
-                        补全缺失 · @pendingCultures.Count 项
-                    </MButton>
-                    @* 有已审核译文时按钮转危险色：点之前就能看出这一下会弹确认，具体覆盖哪些语种看悬停提示 *@
-                    <MButton XSmall Outlined Color="Error"
-                             Disabled="@Busy"
-                             title="@EntryMatrix.OverwriteTitle(approvedCultures)"
-                             OnClick="@(() => OnRequestAi.InvokeAsync(true))">
-                        重新翻译全部 · @TargetCultures.Count 个语种
-                    </MButton>
-                </div>
-            }
         }
-        @* 删除不依赖语种配置，固定排在 AI 按钮组下方：同为带边框的等宽按钮，仅文字与图标用危险红区分层级 *@
-        <div class="mt-2">
-            <MButton XSmall Outlined Color="Error" Block
-                     Disabled="@(Busy || AnyAiBusy)"
-                     title="删除这条词条及其全部语种的译文"
-                     OnClick="@(() => OnRequestDelete.InvokeAsync())">
-                <MIcon Small Class="mr-1">mdi-delete-outline</MIcon>
-                删除词条
-            </MButton>
-        </div>
+        @if (busyLabel is not null)
+        {
+            <div class="d-flex align-center" Role="status">
+                <MProgressCircular Indeterminate Size="16" Width="2" Class="mr-2" />
+                <span class="text-caption text--secondary">@busyLabel</span>
+            </div>
+        }
+        else
+        {
+            @* 只放一个可见动作 + 一个 kebab：
+               ① 「补全缺失」在无事可做时**不渲染**——禁用的空动作每行都在喊「我什么也干不了」，
+                  一页上百行就成了一列灰按钮；不渲染时这一格自然安静。
+               ② 「重新翻译全部」会覆盖已审核译文、「删除词条」直接删数据，两者都是低频或破坏性动作，
+                  收进 kebab 后行内只剩主操作，宽度也不会参差。
+               ③ 右对齐固定：kebab 宽度恒定，主操作出现与否都不改变它的位置。 *@
+            <div class="d-flex align-center justify-end lingua-row-actions">
+                @if (pendingCultures.Count > 0)
+                {
+                    <MButton Small Outlined Class="mr-1"
+                             Disabled="@Busy"
+                             title="只翻译缺失、草稿与待复核的语种；已审核与 AI 已通过的译文不会被覆盖"
+                             OnClick="@(() => OnRequestAi.InvokeAsync(false))">
+                        补全 @pendingCultures.Count 项
+                    </MButton>
+                }
+                <MMenu OffsetY>
+                    <ActivatorContent>
+                        <MButton Small Icon @attributes="@context.Attrs"
+                                 Disabled="@(Busy || AnyAiBusy)"
+                                 aria-label="更多操作" title="更多操作">
+                            <MIcon Small>mdi-dots-horizontal</MIcon>
+                        </MButton>
+                    </ActivatorContent>
+                    <ChildContent>
+                        <MList Dense>
+                            @if (TargetCultures.Count > 0)
+                            {
+                                <MListItem OnClick="@(() => OnRequestAi.InvokeAsync(true))" Disabled="@Busy">
+                                    <MListItemContent>
+                                        <MListItemTitle>重新翻译全部</MListItemTitle>
+                                        @* 会覆盖已审核译文时，把后果直接写在副标题上（菜单里看不出危险色，
+                                           所以必须用文字说明），悬停仍给出完整清单。 *@
+                                        <MListItemSubtitle title="@EntryMatrix.OverwriteTitle(approvedCultures)">
+                                            @(approvedCultures.Count > 0
+                                                ? $"{TargetCultures.Count} 个语种 · 会覆盖 {approvedCultures.Count} 项已审核"
+                                                : $"{TargetCultures.Count} 个语种")
+                                        </MListItemSubtitle>
+                                    </MListItemContent>
+                                </MListItem>
+                            }
+                            <MListItem OnClick="@(() => OnRequestDelete.InvokeAsync())" Disabled="@(Busy || AnyAiBusy)">
+                                <MListItemContent>
+                                    <MListItemTitle>删除词条</MListItemTitle>
+                                    <MListItemSubtitle>连同全部语种的译文</MListItemSubtitle>
+                                </MListItemContent>
+                            </MListItem>
+                        </MList>
+                    </ChildContent>
+                </MMenu>
+            </div>
+        }
     </td>
 </tr>
 

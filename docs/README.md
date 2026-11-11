@@ -8,6 +8,12 @@ English guides first, Chinese translations alongside (`.zh-CN.md`). The per-clie
 | [Architecture](architecture.md) | [架构](architecture.zh-CN.md) | Components, projects, data flow, distribution contract, validation pipeline |
 | [Deployment](deployment.md) | [部署](deployment.zh-CN.md) | Production checklist: image, volumes, HTTPS, GC, access model, CI/CD topology |
 
+## UI reference (中文)
+
+| Document | Content |
+|---|---|
+| [Masa.Blazor Utility Classes](ui/masa-blazor-utilities.zh-CN.md) | 管理后台样式唯一参考：Masa 实际提供的工具类、精确声明、响应式写法、皮肤兼容分级（A/B/C），以及 Masa **不提供**因而禁止书写的族。机器可读索引：[`ui/masa-blazor-utilities.json`](ui/masa-blazor-utilities.json)，由 `build/extract-masa-utilities.mjs` 从 `masa-blazor.min.css` 提取，组件库升级后重跑 |
+
 ## Client integration guides (中文)
 
 | Client | Guide | Package / tool |
@@ -30,6 +36,7 @@ English guides first, Chinese translations alongside (`.zh-CN.md`). The per-clie
 | [快速开始](quickstart.zh-CN.md) | [Quick start](quickstart.md) | 空库 → 建项目 → 导入 → 发布 → 消费，5 分钟 |
 | [架构](architecture.zh-CN.md) | [Architecture](architecture.md) | 组件、工程、数据流、分发契约、校验流水线 |
 | [部署](deployment.zh-CN.md) | [Deployment](deployment.md) | 生产清单：镜像、挂卷、HTTPS、GC、访问模型、CI/CD 拓扑 |
+| [Masa.Blazor 工具类](ui/masa-blazor-utilities.zh-CN.md) | — | 管理后台样式唯一参考：Masa 实际提供的工具类与精确声明、响应式写法、皮肤兼容分级、禁止书写的族 |
 
 ## 各端接入指南（中文）
 

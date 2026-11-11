@@ -9,12 +9,12 @@
 
 <PageTitle>导入与发布 · MASA.Lingua</PageTitle>
 
-@* 页头状态摘要 + 唯一的主按钮：线上版本 / 草稿差异 / 门禁结论一眼可见。
-   发布后原地刷新数据时保持可见（不跟着正文一起进加载态），按钮因此不会消失。 *@
-<div class="d-flex align-start justify-space-between flex-wrap mb-6" style="gap:1rem">
-    <div style="min-width:0">
+@* 页头：项目名与状态摘要作为说明行（不是一组 chip），右侧只留一个实心「发布」。
+   发布后原地刷新数据时页头保持可见，按钮不会消失。 *@
+<div class="lingua-page-head">
+    <div class="lingua-page-head-text">
         <h1 class="text-h5 mb-1">导入与发布</h1>
-        <p class="text-body-2 mb-0">
+        <p class="text-body-2 mb-0 text--secondary">
             @if (Project is { } head)
             {
                 <span>为「@head.Code」导入现有 JSON，并将草稿发布为对外分发的语言包。</span>
@@ -31,19 +31,10 @@
     </div>
     @if (Project is { } headProject)
     {
-        <div class="d-flex align-center flex-wrap" style="gap:1.25rem">
-            <span class="text-caption">
-                线上版本
-                <code title="最近一次发布产生的版本指纹">@(string.IsNullOrEmpty(headProject.LastPublishedVersionHash) ? "尚未发布" : headProject.LastPublishedVersionHash)</code>
-            </span>
-            @if (headProject.LastPublishedAt is not null)
-            {
-                <span class="text-caption">最近发布 <LocalTime Value="headProject.LastPublishedAt" /></span>
-            }
-            <span class="text-caption">草稿 <b>@DraftStateLabel</b></span>
+        <div class="d-flex align-center flex-wrap">
             @if (_report is { } gate)
             {
-                <MChip Small Color="@(gate.CanPublish ? "Success" : "Error")" title="@gate.Summary">@GateLabel(gate)</MChip>
+                <MChip Small Color="@(gate.CanPublish ? "Success" : "Error")" Class="mr-3" title="@gate.Summary">@GateLabel(gate)</MChip>
             }
             <MButton Color="Primary" OnClick="PublishAsync" Disabled="@PublishDisabled" title="@PublishTitle">
                 @(_isBusy ? "处理中…" : "发布")
@@ -52,10 +43,36 @@
     }
 </div>
 
+@if (Project is { } statusProject)
+{
+    @* 发布状态信息行：线上版本 / 最近发布 / 草稿状态。放在页头下面单独一行，
+       避免和「发布」按钮争抢同一行空间，窄屏也不会挤成一坨。 *@
+    <div class="d-flex align-center flex-wrap mb-6">
+        <span class="text-caption text--secondary mr-6">
+            线上版本
+            @if (string.IsNullOrEmpty(statusProject.LastPublishedVersionHash))
+            {
+                <strong class="text--primary">尚未发布</strong>
+            }
+            else
+            {
+                <PCopyableText Text="@statusProject.LastPublishedVersionHash" Class="ml-1">
+                    <code title="最近一次发布产生的版本指纹">@statusProject.LastPublishedVersionHash</code>
+                </PCopyableText>
+            }
+        </span>
+        @if (statusProject.LastPublishedAt is not null)
+        {
+            <span class="text-caption text--secondary mr-6">最近发布 <strong class="text--primary"><LocalTime Value="statusProject.LastPublishedAt" /></strong></span>
+        }
+        <span class="text-caption text--secondary">草稿 <strong class="text--primary">@DraftStateLabel</strong></span>
+    </div>
+}
+
 @if (_isLoading)
 {
-    <div class="d-flex align-center justify-center py-16" style="gap:12px" role="status">
-        <MProgressCircular Indeterminate Size="22" Width="2" />
+    <div class="d-flex align-center py-8" role="status">
+        <MProgressCircular Indeterminate Size="18" Width="2" Class="mr-3" />
         <span class="text-body-2">正在加载当前项目的发布状态…</span>
     </div>
 }
@@ -82,21 +99,22 @@ else
         </MAlert>
     }
 
-    <MTabs Value="@TabValue" ValueChanged="OnTabChanged" aria-label="导入与发布视图" Class="mb-4">
+    @* 页签自带下边距，下划线由 MTabs 自身提供；分隔线不加，避免两道横线叠在一起 *@
+    <MTabs Value="@TabValue" ValueChanged="OnTabChanged" aria-label="导入与发布视图" Class="mb-6">
         <MTab Value="@((int)ReleaseTab.Publish)">
             发布
             @if (_report is { CanPublish: false } blocked)
             {
-                <MChip XSmall Color="Error" Class="ml-2">阻断 @blocked.Blockers.Count</MChip>
+                <MChip Small Color="Error" Class="ml-2">阻断 @blocked.Blockers.Count</MChip>
             }
             else if (_diff is { HasChanges: true } pending)
             {
-                <MChip XSmall Class="ml-2">待发布 @pending.ChangedKeyCount</MChip>
+                <MChip Small Class="ml-2">待发布 @pending.ChangedKeyCount</MChip>
             }
         </MTab>
         <MTab Value="@((int)ReleaseTab.Import)">导入</MTab>
         <MTab Value="@((int)ReleaseTab.History)">
-            历史<MChip XSmall Class="ml-2">@_historyTotalCount</MChip>
+            历史<MChip Small Class="ml-2">@_historyTotalCount</MChip>
         </MTab>
         <MTab Value="@((int)ReleaseTab.Distribution)">分发</MTab>
     </MTabs>
@@ -109,7 +127,7 @@ else
                     <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                         <div>
                             <h2 id="release-title" class="text-h6 mb-1">发布前检查</h2>
-                            <span class="text-caption">检查即将上线的译文；草稿与待复核按策略不进发布文件</span>
+                            <span class="text-caption text--secondary">检查即将上线的译文；草稿与待复核按策略不进发布文件</span>
                         </div>
                         <MButton Small aria-haspopup="dialog" title="决定发布文件里包含哪些译文，以及发布前的门禁条件"
                                  OnClick="OpenPolicyDrawer">
@@ -156,11 +174,11 @@ else
                                     var isSource = string.Equals(c.Culture, project.DefaultCulture, StringComparison.OrdinalIgnoreCase);
                                     <tr>
                                         <td><code>@c.Culture</code>@(isSource ? " · 源语言" : "")</td>
-                                        <td class="text-right">@c.Approved</td>
-                                        <td class="text-right">@c.Ai</td>
-                                        <td class="text-right">@c.Review</td>
-                                        <td class="text-right">@c.Missing</td>
-                                        <td class="text-right">@(isSource ? "100" : c.LivePercent(report.Policy.Content).ToString())%</td>
+                                        <td class="text-right lingua-num">@c.Approved</td>
+                                        <td class="text-right lingua-num">@c.Ai</td>
+                                        <td class="text-right lingua-num">@c.Review</td>
+                                        <td class="text-right lingua-num">@c.Missing</td>
+                                        <td class="text-right lingua-num">@(isSource ? "100" : c.LivePercent(report.Policy.Content).ToString())%</td>
                                     </tr>
                                 }
                             </tbody>
@@ -168,7 +186,7 @@ else
 
                         @if (report.ExcludedTranslations > 0)
                         {
-                            <p class="text-caption mt-3 mb-0">
+                            <p class="text-caption text--secondary mt-3 mb-0">
                                 另有 @report.ExcludedTranslations 条译文因状态未达到发布策略（@ContentModeLabel(report.Policy.Content)）不会进入发布文件。
                             </p>
                         }
@@ -183,13 +201,13 @@ else
                                 未通过发布前检查：
                                 @foreach (var blocker in report.Blockers)
                                 {
-                                    <MChip XSmall Color="Error" Class="ml-2 mb-1">@blocker.Message</MChip>
+                                    <MChip Small Color="Error" Class="ml-2 mb-1">@blocker.Message</MChip>
                                 }
                             </MAlert>
 
                             @if (report.BlockingIssues.Count > 0)
                             {
-                                <ul class="text-body-2 mt-2" aria-label="阻断问题示例">
+                                <ul class="text-body-2 mt-2 mb-0" aria-label="阻断问题示例">
                                     @foreach (var issue in report.BlockingIssues.Take(8))
                                     {
                                         <li><code>@issue.EntryKey</code> · <code>@issue.Culture</code> · @issue.Message</li>
@@ -226,14 +244,14 @@ else
                 <MCardText>
                     <div class="mb-4">
                         <h2 id="import-title" class="text-h6 mb-1">导入 JSON</h2>
-                        <span class="text-caption">嵌套树状取第一层为命名空间；扁平 Key 进「项目根」；导入的译文按「已审核」入库</span>
+                        <span class="text-caption text--secondary">嵌套树状取第一层为命名空间；扁平 Key 进「项目根」；导入的译文按「已审核」入库</span>
                     </div>
 
-                    <form @onsubmit="ImportJsonAsync" class="d-flex flex-column" style="gap:1rem">
+                    <form @onsubmit="ImportJsonAsync" class="lingua-stack">
                         @* 语种改可搜索选择器：原来要手写 en-US 这样的代码，拼错会静默变成一个新语种（还可能和项目里已有的写法不一致）。
                            ExtraCodes 带上项目已支持的语种与默认语种：它们可能不在 ICU 枚举结果里（如 zh-CN），但必须能选到。 *@
                         <div>
-                            <div class="text-body-2 mb-1">导入语种 <span class="text-caption">对应文件名，如 zh-CN.json；可搜索中/英文名或代码</span></div>
+                            <div class="text-body-2 mb-1">导入语种 <span class="text-caption text--secondary">对应文件名，如 zh-CN.json；可搜索中/英文名或代码</span></div>
                             <CultureSelect Value="@_importCulture" ValueChanged="OnImportCultureChanged"
                                            ExtraCodes="@ImportCultureCandidates" AriaLabel="导入语种" />
                         </div>
@@ -242,7 +260,7 @@ else
                             <InputFile @key="_fileInputKey" OnChange="OnFileSelectedAsync" accept=".json" />
                             @if (_fileBytes is not null)
                             {
-                                <span class="text-caption" Role="status">
+                                <span class="text-caption text--secondary" Role="status">
                                     已读取 <code>@_fileName</code>（@FormatSize(_fileBytes.Length)），导入将使用该文件而不是下方文本框。
                                     <MButton Small Variant="Text" OnClick="ClearFile">改用文本框</MButton>
                                 </span>
@@ -286,13 +304,13 @@ else
                     <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                         <div>
                             <h2 id="history-title" class="text-h6 mb-1">发布历史</h2>
-                            <span class="text-caption" title="回滚只改线上产物，不改草稿词条；回滚也会通知业务端重新同步">最近 @EfCoreLinguaRepository.SnapshotContentRetention 次保存了产物，可回滚</span>
+                            <span class="text-caption text--secondary" title="回滚只改线上产物，不改草稿词条；回滚也会通知业务端重新同步">最近 @EfCoreLinguaRepository.SnapshotContentRetention 次保存了产物，可回滚</span>
                         </div>
                     </div>
 
                     @if (_history.Count == 0)
                     {
-                        <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0">还没有发布记录。</MAlert>
+                        <MEmptyState Icon="mdi-history" Text="还没有发布记录。第一次发布会把当前草稿全部上线。" />
                     }
                     else
                     {
@@ -303,7 +321,7 @@ else
                                     <th>版本</th>
                                     <th>说明</th>
                                     <th class="text-right">条数</th>
-                                    <th class="text-right"><span class="sr-only">操作</span></th>
+                                    <th class="text-right"><span class="d-sr-only">操作</span></th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -314,37 +332,37 @@ else
                                     var isCurrent = HistoryPageIndex == 0 && i == 0;
                                     <tr @key="s.Id">
                                         <td><LocalTime Value="s.PublishedAt" Format="seconds" /></td>
-                                        <td class="text-nowrap">
+                                        <td class="text-no-wrap">
                                             <code>@s.VersionHash</code>
-                                            @if (isCurrent) { <MChip XSmall Color="Success" Class="ml-1">线上</MChip> }
-                                            @if (s.Kind == SnapshotKind.Rollback) { <MChip XSmall Class="ml-1">回滚</MChip> }
-                                            @if (s.Forced) { <MChip XSmall Color="Warning" Class="ml-1" title="@s.ForceReason">强制发布</MChip> }
+                                            @if (isCurrent) { <MChip Small Color="Success" Class="ml-1">线上</MChip> }
+                                            @if (s.Kind == SnapshotKind.Rollback) { <MChip Small Class="ml-1">回滚</MChip> }
+                                            @if (s.Forced) { <MChip Small Color="Warning" Class="ml-1" title="@s.ForceReason">强制发布</MChip> }
                                         </td>
                                         <td>
                                             @s.ReleaseNote
                                             @if (s.Forced && !string.IsNullOrWhiteSpace(s.ForceReason))
                                             {
-                                                <span class="d-block text-caption">强制原因：@s.ForceReason</span>
+                                                <span class="d-block text-caption text--secondary">强制原因：@s.ForceReason</span>
                                             }
                                         </td>
-                                        <td class="text-right">@s.EntryCount</td>
-                                        <td class="text-right text-nowrap">
+                                        <td class="text-right lingua-num">@s.EntryCount</td>
+                                        <td class="text-right text-no-wrap">
                                             @if (isCurrent)
                                             {
-                                                <span class="text-caption">当前版本</span>
+                                                <span class="text-caption text--secondary">当前版本</span>
                                             }
                                             else if (!s.CanRollback)
                                             {
-                                                <span class="text-caption" title="早期版本或超出保留数量，没有保存产物内容">不可回滚</span>
+                                                <span class="text-caption text--secondary" title="早期版本或超出保留数量，没有保存产物内容">不可回滚</span>
                                             }
                                             else if (_rollbackConfirmId == s.Id)
                                             {
-                                                <MButton XSmall Color="Primary" OnClick="@(() => RollbackAsync(s.Id))" Disabled="@_isBusy">确认回滚</MButton>
-                                                <MButton XSmall Variant="Text" OnClick="@(() => _rollbackConfirmId = null)">取消</MButton>
+                                                <MButton Small Color="Primary" OnClick="@(() => RollbackAsync(s.Id))" Disabled="@_isBusy">确认回滚</MButton>
+                                                <MButton Small Variant="Text" OnClick="@(() => _rollbackConfirmId = null)">取消</MButton>
                                             }
                                             else
                                             {
-                                                <MButton XSmall Variant="Text" OnClick="@(() => _rollbackConfirmId = s.Id)">回滚到此版本</MButton>
+                                                <MButton Small Variant="Text" OnClick="@(() => _rollbackConfirmId = s.Id)">回滚到此版本</MButton>
                                             }
                                         </td>
                                     </tr>
@@ -354,14 +372,14 @@ else
 
                         @if (_historyTotalCount > 0)
                         {
-                            <div class="d-flex align-center flex-wrap mt-4" style="gap:0.75rem">
-                                <span class="text-caption">共 <b>@_historyTotalCount</b> 次发布</span>
+                            <div class="lingua-toolbar mt-4">
+                                <span class="text-caption text--secondary">共 <b class="text--primary">@_historyTotalCount</b> 次发布</span>
                                 <MSelect TItem="int" TItemValue="int" TValue="int"
                                          Items="HistoryPageSizeOptions"
                                          ItemText='@(s => $"每页 {s} 条")' ItemValue="s => s"
                                          @bind-Value="_historyPageSize" @bind-Value:after="ResetHistoryPageAsync"
-                                         Dense Outlined HideDetails="true" Style="max-width:132px" aria-label="每页条数" />
-                                <div class="flex-grow-1"></div>
+                                         Dense Outlined HideDetails="true" Class="lingua-page-size" aria-label="每页条数" />
+                                <MSpacer />
                                 <MPagination Value="@(HistoryPageIndex + 1)" ValueChanged="OnHistoryPageChanged"
                                              Length="@HistoryTotalPages" TotalVisible="5" Disabled="@_isBusy" Circle="true" />
                             </div>
@@ -375,15 +393,15 @@ else
                     <div class="d-flex align-center justify-space-between flex-wrap mb-4">
                         <div>
                             <h2 id="delivery-title" class="text-h6 mb-1">业务端采用情况</h2>
-                            <span class="text-caption" title="实例通过 X-Lingua-Client / X-Lingua-Version 请求头自报，仅统计最近 24 小时活跃的实例；重启服务后清空">最近 24 小时</span>
+                            <span class="text-caption text--secondary" title="实例通过 X-Lingua-Client / X-Lingua-Version 请求头自报，仅统计最近 24 小时活跃的实例；重启服务后清空">最近 24 小时</span>
                         </div>
                         <MButton Small OnClick="RefreshAdoption">刷新</MButton>
                     </div>
 
-                    <div class="mb-4">当前在用的版本 <b>@_adoption.TotalInstances</b> 个实例</div>
+                    <div class="mb-4 text-body-2">当前在用的版本 <b class="lingua-num">@_adoption.TotalInstances</b> 个实例</div>
                     @if (_adoption.Versions.Count == 0)
                     {
-                        <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0">最近 24 小时没有业务端实例拉取过 manifest 或语言包。</MAlert>
+                        <MEmptyState Icon="mdi-server-network-off" Text="最近 24 小时没有业务端实例拉取过 manifest 或语言包。" />
                     }
                     else
                     {
@@ -401,13 +419,13 @@ else
                                 {
                                     var isOnline = row.Version == project.LastPublishedVersionHash;
                                     <tr>
-                                        <td class="text-nowrap">
+                                        <td class="text-no-wrap">
                                             <code>@row.Version</code>
-                                            @if (isOnline) { <MChip XSmall Color="Success" Class="ml-1">线上</MChip> }
-                                            else if (row.Version != AdoptionTracker.NoVersion) { <MChip XSmall Color="Warning" Class="ml-1">落后</MChip> }
+                                            @if (isOnline) { <MChip Small Color="Success" Class="ml-1">线上</MChip> }
+                                            else if (row.Version != AdoptionTracker.NoVersion) { <MChip Small Color="Warning" Class="ml-1">落后</MChip> }
                                         </td>
-                                        <td class="text-right">@row.Instances</td>
-                                        <td class="text-right">@(_adoption.TotalInstances == 0 ? 0 : (int)Math.Round(row.Instances * 100.0 / _adoption.TotalInstances))%</td>
+                                        <td class="text-right lingua-num">@row.Instances</td>
+                                        <td class="text-right lingua-num">@(_adoption.TotalInstances == 0 ? 0 : (int)Math.Round(row.Instances * 100.0 / _adoption.TotalInstances))%</td>
                                         <td>@string.Join("、", row.Kinds)</td>
                                     </tr>
                                 }
@@ -425,45 +443,45 @@ else
                 <MCardText>
                     <div class="mb-4">
                         <h2 id="files-title" class="text-h6 mb-1">发布文件</h2>
-                        <span class="text-caption">Vue、ASP.NET Core 与 .NET MAUI 统一消费同一份静态 JSON</span>
+                        <span class="text-caption text--secondary">Vue、ASP.NET Core 与 .NET MAUI 统一消费同一份静态 JSON</span>
                     </div>
 
-                    <dl class="mb-4">
-                        <div class="d-flex justify-space-between py-2">
-                            <dt class="mr-4">项目</dt>
-                            <dd class="ml-4 mb-0"><code>@project.Code</code></dd>
-                        </div>
-                        <div class="d-flex justify-space-between py-2">
-                            <dt class="mr-4">ETag 指纹</dt>
-                            <dd class="ml-4 mb-0"><code>@_previewEtag</code></dd>
-                        </div>
-                        <div class="d-flex justify-space-between py-2">
-                            <dt class="mr-4">固定地址</dt>
-                            <dd class="ml-4 mb-0">
-                                <a href="/i18n/@project.Code/@(_previewCulture).json" target="_blank" rel="noopener"><code>/i18n/@project.Code/@(_previewCulture).json</code></a>
-                            </dd>
-                        </div>
-                    </dl>
+                    @* 键值信息用 MDescriptions（组件库自带的描述列表），不再手写 dl + flex *@
+                    <MDescriptions Bordered Dense Class="mb-4">
+                        <MDescriptionsItem Label="项目">
+                            <code>@project.Code</code>
+                        </MDescriptionsItem>
+                        <MDescriptionsItem Label="ETag 指纹">
+                            <code>@_previewEtag</code>
+                        </MDescriptionsItem>
+                        <MDescriptionsItem Label="固定地址">
+                            <a href="/i18n/@project.Code/@(_previewCulture).json" target="_blank" rel="noopener"><code>/i18n/@project.Code/@(_previewCulture).json</code></a>
+                        </MDescriptionsItem>
+                    </MDescriptions>
 
-                    <div class="d-flex align-center justify-space-between flex-wrap mb-4">
+                    <div class="lingua-toolbar mb-4">
                         <MSelect TItem="string" TItemValue="string" TValue="string"
                                  Items="@(project.SupportedCultures.ToList())"
                                  ItemText="c => c" ItemValue="c => c"
                                  Value="@_previewCulture" ValueChanged="OnPreviewCultureChanged"
-                                 Dense Outlined HideDetails="true" Style="max-width:160px" aria-label="预览语种" />
+                                 Dense Outlined HideDetails="true" Class="lingua-preview-culture" aria-label="预览语种" />
+                        <MSpacer />
                         <MButton Href="@($"/api/v1/projects/{project.Code}/export-zip")" target="_blank" rel="noopener">下载全语种 ZIP</MButton>
                     </div>
 
                     @if (!_previewLoaded)
                     {
-                        <MAlert Type="@AlertTypes.Info" Text Dense Class="mb-0" Role="status">正在编译 @(_previewCulture).json…</MAlert>
+                        <div class="d-flex align-center py-4" Role="status">
+                            <MProgressCircular Indeterminate Size="18" Width="2" Class="mr-3" />
+                            <span class="text-body-2">正在编译 @(_previewCulture).json…</span>
+                        </div>
                     }
                     else
                     {
                         <pre class="code" tabindex="0" aria-label="@($"{_previewCulture}.json 预览")">@_previewJsonContent</pre>
                         @if (_previewTruncated)
                         {
-                            <p class="text-caption mt-3 mb-0">
+                            <p class="text-caption text--secondary mt-3 mb-0">
                                 预览只显示前 @(PreviewMaxChars / 1000)K 字符，完整内容请用上方固定地址或「下载全语种 ZIP」获取。
                             </p>
                         }
@@ -479,7 +497,7 @@ else
            Intro="决定发布文件里包含哪些译文，以及发布前的门禁条件。策略按项目保存，改完立即按新策略重新检查。"
            OnClose="ClosePolicyDrawer">
     <ChildContent>
-        <div class="d-flex flex-column" style="gap:1rem">
+        <div class="lingua-stack">
             <MSelect TItem="PublishContentMode" TItemValue="PublishContentMode" TValue="PublishContentMode"
                      Items="@(Enum.GetValues<PublishContentMode>())"
                      ItemText="m => ContentModeLabel(m)" ItemValue="m => m"
@@ -496,7 +514,7 @@ else
         </div>
     </ChildContent>
     <FooterContent>
-        <div class="d-flex" style="gap:0.5rem">
+        <div class="lingua-inline-gap">
             <MButton Color="Primary" OnClick="SavePolicyAsync" Disabled="@_isBusy">保存策略</MButton>
             <MButton OnClick="ClosePolicyDrawer">收起</MButton>
         </div>

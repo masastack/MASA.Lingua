@@ -1,35 +1,37 @@
-@* 右侧抽屉：承载「语种设置」「接入密钥」这类低频项目配置。
-   放在页头按钮里打开，而不是在页面正文里原地展开：正文里的设置面板会把词条矩阵推下去。
+@* 右侧抽屉：承载「语种设置」「接入密钥」「发布策略」这类低频项目配置。
+   放在页头按钮里打开，而不是在页面正文里原地展开：正文里的设置面板会把主内容推下去。
+
    Masa.Blazor 的 fixed 定位类条件是 !Absolute && (App || Fixed)：Temporary 不会自动进入 fixed
    （与 Vuetify2 不同），这里必须显式 Fixed，否则抽屉是文档流里的静态块而不是右侧浮层。
-   Fixed + Temporary 自带遮罩、Esc 关闭与焦点管理；组件自关时通过 OnClose 通知页面回写 Open。 *@
+   Fixed + Temporary 自带遮罩、Esc 关闭与焦点管理；组件自关时通过 OnClose 通知页面回写 Open。
+
+   三段式布局（头部固定 / 正文滚动 / footer 贴底）由 .lingua-drawer* 三个类承担：
+   MNavigationDrawer 内部有 __content 滚动容器包裹 slot 内容，直接在子元素上写 flex-grow 不生效
+   （父是块级不是 flex），必须用一整屏高的 flex column 包装。 *@
 <MNavigationDrawer @bind-Value="_open" @bind-Value:after="OnInternalChanged" Right Temporary Fixed Width="480">
-    @* MNavigationDrawer 内部有个 __content 滚动容器包裹 slot 内容——直接在子元素上写 flex-grow 不生效
-       （父是块级不是 flex）。这里用 height:100% 的 flex column 包装把整块内容撑到抽屉视口高度，
-       body 区 flex-grow:1 占据剩余空间、自身滚动，footer 永远贴底可见。 *@
-    <div class="d-flex flex-column" style="height: 100%; min-height: 100%;">
-        <div class="d-flex align-center justify-space-between px-4 pt-4" style="flex-shrink: 0;">
-            <div style="min-width:0">
-                <h2 class="text-h6">@Title</h2>
+    <div class="lingua-drawer">
+        <div class="d-flex align-center justify-space-between px-4 pt-4 lingua-drawer-head">
+            <div class="lingua-drawer-title">
+                <h2 class="text-h6 mb-1">@Title</h2>
                 @if (!string.IsNullOrWhiteSpace(Intro))
                 {
-                    <p class="text-body-2">@Intro</p>
+                    <p class="text-body-2 text--secondary mb-0">@Intro</p>
                 }
             </div>
             <MButton Icon OnClick="CloseAsync" aria-label="关闭">
                 <MIcon>mdi-close</MIcon>
             </MButton>
         </div>
-        <MDivider Class="my-3" style="flex-shrink: 0;" />
+        <MDivider Class="my-3 lingua-drawer-head" />
 
-        <div class="px-4 pb-4 flex-grow-1" style="overflow-y: auto; min-height: 0;">
+        <div class="px-4 pb-4 flex-grow-1 lingua-drawer-body">
             @ChildContent
         </div>
 
         @if (FooterContent is not null)
         {
-            <MDivider style="flex-shrink: 0;" />
-            <div class="px-4 py-3" style="flex-shrink: 0;">
+            <MDivider Class="lingua-drawer-foot" />
+            <div class="px-4 py-3 lingua-drawer-foot">
                 @FooterContent
             </div>
         }

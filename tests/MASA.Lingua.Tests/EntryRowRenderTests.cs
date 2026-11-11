@@ -50,13 +50,41 @@ public sealed class EntryRowRenderTests
         protected override void NavigateToCore(string uri, bool forceLoad) { }
     }
 
+    /// <summary>
+    /// JS 桩：MButton 的 ripple、MMenu 的 activatable 模块都会在 AfterRender 阶段调 JS。
+    /// 返回非 null 的 <see cref="IJSObjectReference"/> 是必须的 —— 激活类组件会继续对它调
+    /// <c>invokeMethodAsync</c>，给 null 会 NRE（不是「JS 未实现」而是「引用为空」）。
+    /// </summary>
     private sealed class StubJs : IJSRuntime
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args)
+        {
+            if (typeof(TValue) == typeof(IJSObjectReference) || typeof(TValue) == typeof(IJSInProcessObjectReference))
+            {
+                return ValueTask.FromResult((TValue)(object)new StubJsObject());
+            }
+
+            return ValueTask.FromResult(default(TValue)!);
+        }
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
+            InvokeAsync<TValue>(identifier, args);
+    }
+
+    /// <summary>JS 模块引用桩：所有 invoke 调用都是空实现。</summary>
+    private sealed class StubJsObject : IJSObjectReference, IJSInProcessObjectReference
     {
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             ValueTask.FromResult(default(TValue)!);
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
             ValueTask.FromResult(default(TValue)!);
+
+        public TValue Invoke<TValue>(string identifier, params object?[]? args) => default!;
+
+        void IDisposable.Dispose() { }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private static readonly string[] AllCultures = ["zh-CN", "en-US", "ja-JP"];
@@ -152,6 +180,20 @@ public sealed class EntryRowRenderTests
         throw new Xunit.Sdk.XunitException($"button with text '{buttonText}' not found in: {html}");
     }
 
+    /// <summary>按钮标签 → 该按钮开始标签里是否带指定的颜色修饰类（MButton Color="Error" 会加 Error 类）。</summary>
+    private static bool ButtonHasColor(string html, string buttonText, string colorToken)
+    {
+        foreach (Match m in Regex.Matches(html, @"<button(?<attrs>[^>]*)>(?<body>.*?)</button>", RegexOptions.Singleline))
+        {
+            if (m.Groups["body"].Value.Contains(buttonText, StringComparison.Ordinal))
+            {
+                return Regex.IsMatch(m.Groups["attrs"].Value, $@"\b{colorToken}\b");
+            }
+        }
+
+        throw new Xunit.Sdk.XunitException($"button with text '{buttonText}' not found in: {html}");
+    }
+
     [Fact]
     public async Task Renders_A_Cell_Per_Culture_With_Status_And_Missing_Placeholder()
     {
@@ -219,8 +261,15 @@ public sealed class EntryRowRenderTests
         Assert.Contains("源文案已变更", html);
         // 待复核（en-US）与源文案已变更（ja-JP）的单元格都带「确认」按钮（MButton 的内容 span）
         Assert.Equal(2, Regex.Matches(html, @">\s*确认\s*</span>").Count);
-        Assert.Contains(@"<span class=""text-caption error--text"" title=""PLACEHOLDER_MISSING"">译文遗漏了占位符: {count}</span>", html);
-        Assert.Contains(@"<span class=""text-caption warning--text"" title=""EMPTY_TRANSLATION"">尚未提供译文</span>", html);
+        // 校验备注按级别着色：Masa 没有 error--text / warning--text 工具类，
+        // 级别改由 MChip 的 Color（映射到 --m-theme-error / --m-theme-warning）表达。
+        Assert.Contains(@"title=""PLACEHOLDER_MISSING""", html);
+        Assert.Contains(@"title=""EMPTY_TRANSLATION""", html);
+        Assert.Contains("译文遗漏了占位符: {count}", html);
+        Assert.Contains("尚未提供译文", html);
+        // 备注不再是被 !important 覆盖的裸 span，而是带 Color 的 chip（Masa 把 Color 名首字母大写放进类名）
+        Assert.Matches(@"class=""[^""]*m-chip[^""]*\bError\b", html);
+        Assert.Matches(@"class=""[^""]*m-chip[^""]*\bWarning\b", html);
     }
 
     [Fact]
@@ -242,47 +291,43 @@ public sealed class EntryRowRenderTests
     }
 
     [Fact]
-    public async Task Ai_Column_Reflects_Pending_Approved_And_Busy_State()
+    public async Task Ai_Column_Shows_One_Primary_Action_And_Hides_When_Nothing_To_Do()
     {
-        // en-US 已审核、ja-JP 缺失：补全 1 项；重新翻译全部会覆盖 en-US 已审核译文 → 危险色 + 悬停点名
+        // en-US 已审核、ja-JP 缺失：只有「补全 1 项」这一个可见动作；
+        // 「重新翻译全部」与「删除词条」都是低频/破坏性动作，收进 kebab 菜单。
         var entry = NewEntry(translations: [("en-US", "Submit", TranslationStatus.Approved)]);
         var idle = await RenderHtmlAsync(RowState.For(entry));
-        Assert.Contains("补全缺失 · 1 项", idle);
-        Assert.Contains("重新翻译全部 · 2 个语种", idle);
-        // 有已审核译文会被覆盖：重新翻译按钮带危险色（MButton Error 的 Error--text）
-        Assert.Contains("Error--text", idle);
-        Assert.Contains("会覆盖 1 项已人工审核的译文（en-US）", idle);
-        Assert.False(IsDisabled(idle, "补全缺失"));
-        Assert.False(IsDisabled(idle, "重新翻译全部"));
-        Assert.False(IsDisabled(idle, "删除词条"));
+        Assert.Contains("补全 1 项", idle);
+        Assert.DoesNotContain("补全缺失", idle);
+        // 菜单项文案在静态 HTML 里仍然是可断言的（MMenu 的内容不被 portal 掉到不可渲染）
+        Assert.False(IsDisabled(idle, "补全 1 项"));
 
-        // 页面忙碌：AI 与删除按钮全部禁用
+        // 页面忙碌：主操作禁用，kebab 也禁用（菜单里的动作此时都不能点）
         var busy = await RenderHtmlAsync(RowState.For(entry) with { Busy = true });
-        Assert.True(IsDisabled(busy, "补全缺失"));
-        Assert.True(IsDisabled(busy, "重新翻译全部"));
-        Assert.True(IsDisabled(busy, "删除词条"));
+        Assert.True(IsDisabled(busy, "补全 1 项"));
 
-        // 别的行正在 AI 翻译：只有删除被禁用
+        // 别的行正在 AI 翻译：本行主操作仍可点（只有删除要禁），kebab 因删除被禁而禁用
         var otherBusy = await RenderHtmlAsync(RowState.For(entry) with { AnyAiBusy = true });
-        Assert.False(IsDisabled(otherBusy, "补全缺失"));
-        Assert.True(IsDisabled(otherBusy, "删除词条"));
+        Assert.False(IsDisabled(otherBusy, "补全 1 项"));
 
-        // 这一行正在 AI 翻译：按钮换成进度提示
+        // 这一行正在 AI 翻译：动作整块换成进度提示
         var filling = await RenderHtmlAsync(RowState.For(entry) with { Ai = EntryRow.AiState.Filling, Busy = true, AnyAiBusy = true });
         Assert.Contains("AI 补全中…", filling);
-        Assert.DoesNotContain("补全缺失 · ", filling);
+        Assert.DoesNotContain("补全 1 项", filling);
+        Assert.DoesNotContain("补全缺失", filling);
         var retranslating = await RenderHtmlAsync(RowState.For(entry) with { Ai = EntryRow.AiState.Retranslating, Busy = true, AnyAiBusy = true });
         Assert.Contains("AI 重新翻译中…", retranslating);
 
-        // 各语种都已就绪：补全 0 项且不可点
+        // 各语种都已就绪：无事可做 → 「补全」按钮整个不渲染（不显示一个禁用的空动作）
         var ready = NewEntry(translations:
         [
             ("en-US", "Submit", TranslationStatus.Approved),
             ("ja-JP", "送信", TranslationStatus.AiTranslated)
         ]);
         var done = await RenderHtmlAsync(RowState.For(ready));
-        Assert.Contains("补全缺失 · 0 项", done);
-        Assert.True(IsDisabled(done, "补全缺失"));
+        Assert.DoesNotContain("补全", done);
+        // 但 kebab 仍在：删除与重译始终可达
+        Assert.Contains(@"aria-label=""更多操作""", done);
     }
 
     [Fact]
