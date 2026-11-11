@@ -83,10 +83,32 @@ public sealed class ProjectSwitchLoadingTests
     private sealed class StubJs : IJSRuntime
     {
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
+            ValueTask.FromResult(InvokeCore<TValue>());
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
+            ValueTask.FromResult(InvokeCore<TValue>());
+
+        // Masa 的 JSModule.DisposeAsync 会在模块未加载（返回 null）时空引用：给一个可释放的桩模块
+        private static TValue InvokeCore<TValue>() =>
+            typeof(TValue) == typeof(IJSObjectReference) ? (TValue)(object)new StubObjectReference() : default!;
+    }
+
+    private sealed class StubObjectReference : IJSObjectReference
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
             ValueTask.FromResult(default(TValue)!);
 
         public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
             ValueTask.FromResult(default(TValue)!);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class TestNavigationManager : Microsoft.AspNetCore.Components.NavigationManager
+    {
+        public TestNavigationManager() => Initialize("https://test.localhost/", "https://test.localhost/");
+
+        protected override void NavigateToCore(string uri, bool forceLoad) { }
     }
 
     private sealed class TestEnv(string root) : IWebHostEnvironment
@@ -103,12 +125,19 @@ public sealed class ProjectSwitchLoadingTests
     {
         public override Dispatcher Dispatcher { get; } = Dispatcher.CreateDefault();
 
+        // Masa 组件（MNavigationDrawer 等）会读取 ElementReference 的 Context 生成选择器：
+        // 测试渲染器没有浏览器，给一个空上下文让 GetSelector 走通（选择器内容不参与断言）
+        private sealed class TestElementReferenceContext : Microsoft.AspNetCore.Components.ElementReferenceContext
+        {
+        }
+
         protected override void HandleException(Exception exception) => ExceptionDispatchInfo.Capture(exception).Throw();
 
         protected override Task UpdateDisplayAsync(in RenderBatch renderBatch) => Task.CompletedTask;
 
         public Task RenderRootAsync(IComponent component)
         {
+            ElementReferenceContext = new TestElementReferenceContext();
             var id = AssignRootComponentId(component);
             return Dispatcher.InvokeAsync(() => RenderRootComponentAsync(id));
         }
@@ -166,9 +195,14 @@ public sealed class ProjectSwitchLoadingTests
             services.AddSingleton<EntryAiTranslator>();
             services.AddScoped<WorkspaceScope>();
             services.AddScoped<ToastService>();
+            // Home 迁移 Masa.Blazor 后的组件（MSimpleTable/MSelect/MChip/MButton 等）需要 MasaBlazor 服务
+            services.AddMasaBlazor();
+            // MButton / MChip 注入 NavigationManager（Href 处理用）
+            services.AddSingleton<Microsoft.AspNetCore.Components.NavigationManager>(new TestNavigationManager());
 
             await using var provider = services.BuildServiceProvider();
-            using var scope = provider.CreateScope();
+            // Masa 组件（TransitionJSModule 等）只实现 IAsyncDisposable：作用域必须异步释放
+            await using var scope = provider.CreateAsyncScope();
 
             // 先把范围落到第一个项目：初次加载就按它走，随后的变化才是「切换项目」
             scope.ServiceProvider.GetRequiredService<WorkspaceScope>().Select(FirstProject);

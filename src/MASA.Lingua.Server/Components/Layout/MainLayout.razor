@@ -1,127 +1,127 @@
 @inherits LayoutComponentBase
 @implements IDisposable
 @inject NavigationManager Nav
+@inject Masa.Blazor.MasaBlazor MasaBlazor
 @inject ILinguaRepository Repository
 @inject WorkspaceScope Scope
 @inject IPmProjectDirectory PmDirectory
 @inject Microsoft.Extensions.Options.IOptions<MASA.Lingua.AI.LinguaAiOptions> AiOptions
 
-<div class="app">
-    <aside class="sidebar @(_navOpen ? "open" : "")" id="app-nav" aria-label="主导航">
-        <div class="brand">
-            <a class="brand-link" href="">
-                <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
-                    <path d="M5 3.5h14A2.5 2.5 0 0 1 21.5 6v9a2.5 2.5 0 0 1-2.5 2.5h-6.1l-4 3.4a.7.7 0 0 1-1.15-.53V17.5H5A2.5 2.5 0 0 1 2.5 15V6A2.5 2.5 0 0 1 5 3.5Z" fill="#1b6c80" />
-                    <path d="M9 7.5v6h5.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-                <span class="brand-name">MASA.Lingua</span>
-            </a>
-            <button class="close" type="button" aria-label="关闭菜单" @onclick="CloseNav">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
-            </button>
-        </div>
+@* 外壳 = Masa.Blazor 标准后台布局：顶栏（品牌 + 项目/应用切换 + AI 引擎 + 用户）+ 左侧导航抽屉 + 主内容区。
+   观感全部交给 masa-design 皮肤 token（应用层零颜色字面量）；移动端（<md 断点）抽屉自动改为临时覆盖式，
+   对应原 app.css 里 860px 媒体查询的折叠侧栏行为。MApp 必须在交互电路内（MainLayout 里），
+   放进 App.razor 会被静态渲染冻结、SetTheme 更新不到 theme class。 *@
+<MApp>
+    @* 布局：侧栏 App Permanent 全高常驻（品牌 + 导航一体），不做展开/收起；
+       App bar 不设 ClippedLeft → 自动右移让位给侧栏，只在内容区上方。
+       品牌 logo 在侧栏顶部（MNavigationDrawer PrependContent），顶栏只放操作控件。 *@
+    <MAppBar App Color="surface" Elevation="0">
 
-        <nav aria-label="页面">
-            <div class="nav-group">词条与术语</div>
-            <NavLink class="nav-item" href="" Match="NavLinkMatch.All">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M2 6.5h12M6 6.5v7" /></svg>
-                词条矩阵
-            </NavLink>
-            <NavLink class="nav-item" href="glossary">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2h7.5a1.5 1.5 0 0 1 1.5 1.5V14H5a1.5 1.5 0 0 1-1.5-1.5V2Z" /><path d="M3.5 12.5A1.5 1.5 0 0 1 5 11h7.5M6.5 5.5h3.5" /></svg>
-                术语库
-            </NavLink>
-
-            <div class="nav-group">分发</div>
-            <NavLink class="nav-item" href="import-export">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 10V2.5M5 5.2 8 2.2l3 3M2.5 10.5v2a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-2" /></svg>
-                导入与发布
-            </NavLink>
-        </nav>
-    </aside>
-
-    <header class="topbar">
-      <div class="topbar-inner">
-        <button class="menu-btn" type="button" aria-label="打开菜单" aria-controls="app-nav"
-                aria-expanded="@(_navOpen ? "true" : "false")" @onclick="OpenNav">
-            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" /></svg>
-        </button>
-
-        <div class="scope">
-            <span>项目</span>
-            @if (_pmFailed)
+        @if (_pmFailed)
+        {
+            <span title="@_pmError">PM 项目清单不可用</span>
+            <MButton Small OnClick="RetryProjectsAsync">重试</MButton>
+        }
+        else
+        {
+            @* 项目下拉当前值单独记录（不从应用 Identity 反推）：PM 里同一应用可能挂在多个项目下 *@
+            <MSelect TItem="ScopeOption" TItemValue="string" TValue="string"
+                     Items="ProjectOptions"
+                     ItemText="o => o.Label" ItemValue="o => o.Value"
+                     Value="@_projectKey" ValueChanged="OnProjectChanged"
+                     Label="项目" Dense Outlined HideDetails="true" Style="max-width:240px" />
+            @* 全局共享命名空间不属于任何 PM 项目，没有应用可选 *@
+            @if (CurrentProject is { } current)
             {
-                <span class="pm-error" title="@_pmError">PM 项目清单不可用</span>
-                <button class="btn sm" type="button" @onclick="RetryProjectsAsync">重试</button>
+                <MSelect TItem="PmApp" TItemValue="string" TValue="string"
+                         Items="AppsOf(current)"
+                         ItemText="a => a.Name" ItemValue="a => a.Identity"
+                         Value="@Scope.ProjectCode" ValueChanged="OnAppChanged"
+                         Label="应用" Dense Outlined HideDetails="true" Style="max-width:240px" Class="ml-4" />
             }
-            else
-            {
-                <select class="select" aria-label="当前项目" value="@_projectKey" @onchange="OnProjectChanged">
-                    @foreach (var project in _projects)
-                    {
-                        <option value="@project.Identity">@project.Name</option>
-                    }
-                    <option value="@WorkspaceScope.Shared">全局共享命名空间</option>
-                </select>
+        }
 
-                @* 全局共享命名空间不属于任何 PM 项目，没有应用可选 *@
-                @if (CurrentProject is { } current)
-                {
-                    <span>应用</span>
-                    <select class="select" aria-label="当前应用" value="@Scope.ProjectCode" @onchange="OnAppChanged">
-                        @foreach (var app in current.Apps)
-                        {
-                            <option value="@app.Identity" title="@app.Identity">@app.Name</option>
-                        }
-                    </select>
-                }
-            }
-        </div>
-
-        <div class="spacer"></div>
+        <MSpacer />
 
         @{
             var ai = AiOptions.Value;
         }
-        <details class="engine">
-            <summary>
-                <span class="dot live"></span>
-                AI 翻译 · @ai.ModelId
-            </summary>
-            <div class="engine-panel">
-                <h2>AI 翻译已启用</h2>
-                <p>
-                    模型 <code>@ai.ModelId</code>，服务 <code>@AiEndpointLabel(ai)</code>。「AI 批量补全」与词条行最右列的「补全缺失 / 重新翻译」都会调用它：
-                    按命中的术语注入提示词，违反术语库或占位符规则的译文会自动修复一次，仍不合格的标为「待复核」。
-                    调用失败会直接显示原因，不会写入任何译文。
-                </p>
-            </div>
-        </details>
+        <MMenu OffsetY CloseOnContentClick="false">
+            <ActivatorContent>
+                <MButton Variant="Text" @attributes="@context.Attrs">
+                    <MIcon Small Color="Success">mdi-circle</MIcon>
+                    <span class="ml-2">AI 翻译 · @ai.ModelId</span>
+                    <MIcon Small>mdi-chevron-down</MIcon>
+                </MButton>
+            </ActivatorContent>
+            <ChildContent>
+                <MCard Outlined Style="max-width:360px">
+                    <MCardTitle>AI 翻译已启用</MCardTitle>
+                    <MCardText>
+                        模型 <code>@ai.ModelId</code>，服务 <code>@AiEndpointLabel(ai)</code>。「AI 批量补全」与词条行最右列的「补全缺失 / 重新翻译」都会调用它：
+                        按命中的术语注入提示词，违反术语库或占位符规则的译文会自动修复一次，仍不合格的标为「待复核」。
+                        调用失败会直接显示原因，不会写入任何译文。
+                    </MCardText>
+                </MCard>
+            </ChildContent>
+        </MMenu>
 
         <AuthorizeView>
             <Authorized>
-                <form class="user" method="post" action="/logout">
-                    <span class="user-name" title="当前登录用户">@(context.User.Identity?.Name ?? "已登录")</span>
-                    <button type="submit" class="user-logout">退出</button>
+                @* 原生表单 POST：退出登录走服务端会话终结，不经 Blazor 交互 *@
+                <form method="post" action="/logout" class="d-flex align-center ml-2">
+                    <span class="mr-2" title="当前登录用户">@(context.User.Identity?.Name ?? "已登录")</span>
+                    <MButton Type="submit" Variant="Text" Small>退出</MButton>
                 </form>
             </Authorized>
         </AuthorizeView>
-      </div>
-    </header>
+    </MAppBar>
 
-    <main class="sheet">
-        <div class="page">
-            @* 与页面内容同一条栏线、同一套留白；放在 .page 内而不是白页顶边，避免被顶栏/圆角压住 *@
+    @* 侧栏 Permanent 全高常驻：从屏幕顶端到底部，不做展开/收起，hamburger 也去掉。 *@
+    <MNavigationDrawer App Permanent Width="228">
+        <PrependContent>
+            @* 品牌：logo + 名称，与侧栏导航一体（标准 MASA Stack 布局），顶栏只放操作控件 *@
+            <div class="d-flex align-center px-4 pt-4 pb-2">
+                <img src="favicon.svg" width="24" height="24" alt="" aria-hidden="true" />
+                <span class="ml-2 text-h6">MASA.Lingua</span>
+            </div>
+        </PrependContent>
+        <ChildContent>
+        <MList Nav Dense>
+            <MSubheader>词条与术语</MSubheader>
+            <MListItem Href="/" Active="@NavActive("")">
+                <MListItemIcon><MIcon>mdi-table</MIcon></MListItemIcon>
+                <MListItemContent><MListItemTitle>词条矩阵</MListItemTitle></MListItemContent>
+            </MListItem>
+            <MListItem Href="glossary" Active="@NavActive("glossary")">
+                <MListItemIcon><MIcon>mdi-book-open-variant</MIcon></MListItemIcon>
+                <MListItemContent><MListItemTitle>术语库</MListItemTitle></MListItemContent>
+            </MListItem>
+
+            <MSubheader>分发</MSubheader>
+            <MListItem Href="import-export" Active="@NavActive("import-export")">
+                <MListItemIcon><MIcon>mdi-cloud-upload-outline</MIcon></MListItemIcon>
+                <MListItemContent><MListItemTitle>导入与发布</MListItemTitle></MListItemContent>
+            </MListItem>
+        </MList>
+        </ChildContent>
+    </MNavigationDrawer>
+
+    <MMain>
+        @* 栏线与留白：居中 + 24px 内边距，宽屏封顶 1560px（纯几何，与皮肤 token 无关） *@
+        <div class="mx-auto pa-6" style="max-width:1560px">            @* 与页面内容同一条栏线、同一套留白；横幅只在「该应用在 Lingua 尚无配置」时出现 *@
             @if (_missingLocalConfig)
             {
-                <div class="pm-init-banner" role="status">
-                    <span>
-                        应用 <code>@Scope.ProjectCode</code> 在 Lingua 尚无多语言配置。
-                    </span>
-                    <button class="btn sm primary" type="button" @onclick="CreateLocalConfigAsync" disabled="@_creating">
-                        @(_creating ? "创建中…" : "创建多语言配置")
-                    </button>
-                </div>
+                <MAlert Type="@AlertTypes.Warning" Dense Class="mb-6">
+                    @* 文案占满剩余宽度、操作按钮顶到右缘：flex 布局 + spacer，不写自定义 CSS *@
+                    <div class="d-flex align-center flex-wrap" style="gap:12px">
+                        <span>应用 <code>@Scope.ProjectCode</code> 在 Lingua 尚无多语言配置。</span>
+                        <div class="flex-grow-1"></div>
+                        <MButton Small Color="Primary" OnClick="CreateLocalConfigAsync" Disabled="@_creating">
+                            @(_creating ? "创建中…" : "创建多语言配置")
+                        </MButton>
+                    </div>
+                </MAlert>
             }
             @* 项目范围（顶栏选中的应用）要等 PM 清单返回并纠正完才算确定：此前渲染页面，各页会先按默认项目加载一遍，
                随后范围被纠正又重载一遍（白白两次整项目加载，且先出的旧数据还可能闪一下）。 *@
@@ -131,13 +131,18 @@
             }
             else
             {
-                <div class="empty roomy" role="status">正在加载项目清单…</div>
+                <div class="d-flex align-center justify-center" style="gap:12px;min-height:200px" role="status">
+                    <MProgressCircular Indeterminate Size="22" Width="2" />
+                    <span>正在加载项目清单…</span>
+                </div>
             }
         </div>
-    </main>
+    </MMain>
 
-    <ToastHost />
-</div>
+    @* 全局浮动提示不需要显式宿主：Masa.Blazor 1.12 的 PopupService 会自动打开 EnqueuedSnackbars，
+       由 MApp 根部的弹窗槽位渲染（IPopupService 队列 → Snackbar 堆叠）。ToastService 仍负责把
+       页面的 Success/Error 转发进这个队列；再放一个 PEnqueuedSnackbars 会导致每条提示渲染两次。 *@
+</MApp>
 
 @code {
     /// <summary>PM 项目及其应用（两级切换器数据源）；PM 是项目来源，本地库不再提供清单。</summary>
@@ -155,16 +160,39 @@
     private string? _pmError;
     private bool _missingLocalConfig;
     private bool _creating;
-    private bool _navOpen;
 
     /// <summary>项目范围已按 PM 清单校验完成：之前不渲染页面内容（<c>@Body</c>），避免页面先按未校验的默认项目加载一遍。</summary>
     private bool _scopeReady;
 
-    protected override async Task OnInitializedAsync()
+    /// <summary>项目下拉的选项：PM 项目 + 「全局共享命名空间」（不属于任何 PM 项目的伪项目）。</summary>
+    private List<ScopeOption> ProjectOptions =>
+        [.. _projects.Select(p => new ScopeOption(p.Identity, p.Name)),
+           new(WorkspaceScope.Shared, "全局共享命名空间")];
+
+    /// <summary>MSelect 的 Items 要 IList：把 PM 应用清单物化成 List。</summary>
+    private static List<PmApp> AppsOf(PmProject project) => [.. project.Apps];
+
+    private sealed record ScopeOption(string Value, string Label);
+
+    /// <summary>侧栏当前项：路由没有嵌套子路径，精确匹配即可（"" 是词条矩阵首页）。</summary>
+    private bool NavActive(string href)
     {
+        var path = Nav.ToBaseRelativePath(Nav.Uri).Split('?')[0].TrimEnd('/');
+        return href == "" ? path == "" : path.Equals(href, StringComparison.OrdinalIgnoreCase);
+    }
+
+    protected override void OnInitialized()
+    {
+        // 皮肤：AddMasaDesign 注册了 masa-design-light/dark，这里选中亮色主题。
+        // html 的 data-skin / data-theme 属性已由 App.razor 的首帧内联脚本先行设置（皮肤 CSS 依赖它们）。
+        MasaBlazor.SetTheme(MasaDesignBlazorExtensions.LightThemeName);
+
         Nav.LocationChanged += OnLocationChanged;
         Scope.Changed += OnScopeChanged;
+    }
 
+    protected override async Task OnInitializedAsync()
+    {
         // 本站点交互组件不做服务端预渲染（见 App.razor），这里只在电路建立时执行一次；
         // PM 调用由目录服务的短时缓存+单飞去重，且用应用身份（client_credentials），不依赖请求/用户上下文。
         try
@@ -179,7 +207,7 @@
     }
 
     /// <summary>手动重试：绕过目录服务的短时失败缓存，真实请求一次 PM。</summary>
-    private async Task RetryProjectsAsync() => await ReloadProjectsAsync(forceRefresh: true);
+    private Task RetryProjectsAsync() => ReloadProjectsAsync(forceRefresh: true);
 
     private async Task ReloadProjectsAsync(bool forceRefresh = false)
     {
@@ -234,9 +262,9 @@
 
     /// <summary>换项目：自动落到该项目的第一个应用（应用下拉随即换成该项目的应用清单）。
     /// 选中真正变化时，Changed 的订阅方（含本布局的 OnScopeChanged）已经会刷新本地状态，这里不再重复查一次。</summary>
-    private async Task OnProjectChanged(ChangeEventArgs e)
+    private async Task OnProjectChanged(string? value)
     {
-        _projectKey = e.Value?.ToString() ?? string.Empty;
+        _projectKey = value ?? string.Empty;
 
         var changed = false;
         if (_projectKey == WorkspaceScope.Shared)
@@ -254,9 +282,9 @@
         }
     }
 
-    private async Task OnAppChanged(ChangeEventArgs e)
+    private async Task OnAppChanged(string? value)
     {
-        var changed = Scope.Select(e.Value?.ToString() ?? string.Empty);
+        var changed = Scope.Select(value ?? string.Empty);
         if (!changed)
         {
             await RefreshLocalStateAsync();
@@ -296,13 +324,8 @@
         StateHasChanged();
     }
 
-    private void OpenNav() => _navOpen = true;
-
-    private void CloseNav() => _navOpen = false;
-
     private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e)
     {
-        _navOpen = false;
         _ = InvokeAsync(StateHasChanged);
     }
 

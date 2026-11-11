@@ -1,136 +1,56 @@
+using Masa.Blazor;
+using Masa.Blazor.Presets;
+using Microsoft.JSInterop;
+
 namespace MASA.Lingua.Server.Services;
-
-/// <summary>提示的语气：成功用绿色竖条，失败用红色竖条。</summary>
-public enum ToastKind
-{
-    Success,
-    Error
-}
-
-public sealed record ToastMessage(Guid Id, string Text, ToastKind Kind);
 
 /// <summary>
 /// 右下角浮动提示（每个 Blazor 电路一份，随电路销毁）。
-/// 成功 3 秒、失败 6 秒后自动消失；失败可手动关闭。
-/// 定时移除在后台线程执行，UI 订阅方负责切回渲染上下文（见 ToastHost）。
+/// 迁移 Masa.Blazor 后：转发到 <see cref="IPopupService"/> 的全局 Snackbar 队列，
+/// 由 MApp 根槽位自动渲染的 EnqueuedSnackbars 渲染堆叠（见 MainLayout 里的说明）。
+/// 成功 3 秒自动消失；失败 6 秒且带手动关闭按钮（对应原 ToastService 的两条生命期）。
+/// 测试宿主没有注册 IPopupService：构造参数走默认值，提示静默丢弃（页面测试只关心页面状态）。
 /// </summary>
-public sealed class ToastService : IDisposable
+public sealed class ToastService(IPopupService? popup = null)
 {
-    private static readonly TimeSpan SuccessLifetime = TimeSpan.FromSeconds(3);
-    private static readonly TimeSpan ErrorLifetime = TimeSpan.FromSeconds(6);
+    private const int SuccessLifetimeMs = 3000;
+    private const int ErrorLifetimeMs = 6000;
 
-    /// <summary>同时最多显示的条数：连续点几次翻译时挤掉最旧的一条，避免右下角堆成一片。</summary>
-    private const int MaxVisible = 3;
+    public void Success(string text) => Show(text, AlertTypes.Success, SuccessLifetimeMs, closeable: false);
 
-    private readonly List<ToastMessage> _items = [];
-    private readonly Dictionary<Guid, CancellationTokenSource> _timers = [];
-    private readonly Lock _gate = new();
-    private bool _disposed;
+    public void Error(string text) => Show(text, AlertTypes.Error, ErrorLifetimeMs, closeable: true);
 
-    /// <summary>列表变化通知；可能在后台线程触发。</summary>
-    public event Action? Changed;
-
-    public IReadOnlyList<ToastMessage> Items
+    private void Show(string text, AlertTypes type, int timeoutMs, bool closeable)
     {
-        get
+        if (popup is null)
         {
-            lock (_gate)
-            {
-                return _items.ToArray();
-            }
+            return; // 未注册全局弹窗服务（单元测试宿主）：没有可用的渲染宿主
         }
+
+        // fire-and-forget 必须自己接住异常：用户关标签页 / 刷新时电路销毁，Snackbar 的
+        // 渲染-定位链会抛 JSDisconnectedException，没人观察就会在 GC finalizer 里重抛、刷 LINGUA-WARNING 日志。
+        _ = ShowAsync(popup, new SnackbarOptions
+        {
+            Content = text,
+            Type = type,
+            Timeout = timeoutMs,
+            Closeable = closeable,
+        });
     }
 
-    public void Success(string text) => Show(text, ToastKind.Success);
-
-    public void Error(string text) => Show(text, ToastKind.Error);
-
-    public void Dismiss(Guid id)
-    {
-        CancellationTokenSource? cts;
-        lock (_gate)
-        {
-            if (!_timers.Remove(id, out cts))
-            {
-                return;
-            }
-
-            _items.RemoveAll(m => m.Id == id);
-        }
-
-        cts.Cancel();
-        cts.Dispose();
-        Changed?.Invoke();
-    }
-
-    private void Show(string text, ToastKind kind)
-    {
-        var message = new ToastMessage(Guid.NewGuid(), text, kind);
-        var cts = new CancellationTokenSource();
-        CancellationTokenSource? evicted = null;
-        lock (_gate)
-        {
-            if (_disposed)
-            {
-                cts.Dispose();
-                return;
-            }
-
-            if (_items.Count >= MaxVisible)
-            {
-                var oldest = _items[0];
-                _items.RemoveAt(0);
-                _timers.Remove(oldest.Id, out evicted);
-            }
-
-            _items.Add(message);
-            _timers[message.Id] = cts;
-        }
-
-        if (evicted is not null)
-        {
-            evicted.Cancel();
-            evicted.Dispose();
-        }
-
-        Changed?.Invoke();
-        _ = RemoveAfterAsync(message.Id, kind == ToastKind.Error ? ErrorLifetime : SuccessLifetime, cts.Token);
-    }
-
-    private async Task RemoveAfterAsync(Guid id, TimeSpan lifetime, CancellationToken token)
+    private static async Task ShowAsync(IPopupService popup, SnackbarOptions options)
     {
         try
         {
-            await Task.Delay(lifetime, token).ConfigureAwait(false);
+            await popup.EnqueueSnackbarAsync(options);
         }
-        catch (OperationCanceledException)
+        catch (JSDisconnectedException)
         {
-            return;
+            // 电路已断开：提示无处可显示，丢弃即可
         }
-
-        Dismiss(id);
-    }
-
-    public void Dispose()
-    {
-        CancellationTokenSource[] timers;
-        lock (_gate)
+        catch (ObjectDisposedException)
         {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            timers = [.. _timers.Values];
-            _timers.Clear();
-            _items.Clear();
-        }
-
-        foreach (var timer in timers)
-        {
-            timer.Cancel();
-            timer.Dispose();
+            // 电路正在销毁：同上
         }
     }
 }

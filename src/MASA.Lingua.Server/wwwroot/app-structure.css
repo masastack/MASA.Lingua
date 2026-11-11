@@ -1,0 +1,87 @@
+/* MASA.Lingua 残留结构样式 —— 应用层唯一允许的自有 CSS（迁移 Masa.Blazor 后的白名单收口）。
+   规则（皮肤项目契约 docs/en/skin-contract.md）：
+   - 颜色一律取 Masa.Blazor 的通道 token：rgb(var(--m-theme-*))，中性灰用 on-surface × --m-border-opacity 组合；
+   - 启动占位在 Blazor 电路建立前渲染（主题变量尚未注入），var() 内只给功能性回退值，不构成主题样式；
+   - 不覆盖 .m-* 组件选择器、不写品牌颜色字面量、不用 !important。
+   收录内容：
+   - 词条矩阵：单元格原生 input 的编辑形态 + 粘性 AI 列（键击级优化依赖原生 input，见 EntryRow.razor 顶注）；
+   - 键名 / 哈希 / 代码的等宽字体（数据标识符，非品牌样式）；
+   - 启动占位（电路建立前的静态 HTML，Masa 类可用但主题变量未注入）；
+   - 屏幕阅读器专用文本。 */
+
+/* ---------- 屏幕阅读器专用（视觉隐藏，标准 clip 模式） ---------- */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- 数据标识符的等宽字体 ---------- */
+code, pre { font-family: ui-monospace, "SF Mono", Consolas, "Courier New", monospace; font-size: 0.9em; }
+
+pre.code {
+  margin: 0; max-height: 360px; overflow: auto; padding: 12px 14px;
+  border: 1px solid rgba(var(--m-theme-on-surface), var(--m-border-opacity));
+  border-radius: 4px; background: rgb(var(--m-theme-surface-container));
+  white-space: pre-wrap; word-break: break-word;
+}
+
+/* ---------- 词条矩阵 ---------- */
+.lingua-matrix td { vertical-align: middle; }
+
+/* AI 列贴住滚动区右缘（语种多时横向滚动仍可操作）：背景必须与卡片表面一致，否则滚动时下方内容透出来。
+   注意用 surface-container 而不是 surface：Masa 的 .m-sheet（卡片）底色取 --m-theme-surface-container，
+   masa-design 皮肤里 surface=F0F3FA（应用背景）、surface-container=白（卡片）——取错 token 列会偏色。 */
+.lingua-matrix th.ai-col, .lingua-matrix td.ai-col {
+  position: sticky; right: 0; z-index: 1;
+  min-width: 196px; padding-left: 12px; padding-right: 12px;
+  background: rgb(var(--m-theme-surface-container));
+  border-left: 1px solid rgba(var(--m-theme-on-surface), var(--m-border-opacity));
+}
+
+.cell { position: relative; min-width: 224px; }
+
+.cell-input {
+  width: 100%; height: 34px; padding: 0 10px;
+  border: 1px solid transparent; border-radius: 4px;
+  background: transparent; color: inherit; font: inherit;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.cell-input:hover { border-color: rgba(var(--m-theme-on-surface), var(--m-border-opacity)); background: rgb(var(--m-theme-surface-container)); }
+.cell-input:focus { outline: 2px solid rgb(var(--m-theme-primary)); outline-offset: -1px; border-color: rgb(var(--m-theme-primary)); background: rgb(var(--m-theme-surface-container)); }
+.cell-input::placeholder { color: rgba(var(--m-theme-on-surface), var(--m-medium-emphasis-opacity)); }
+
+/* 缺失（虚线提示「可填」）/ 有未保存改动（主色实线，与 AI 已译的左侧信息色条区分开） */
+.cell.is-missing .cell-input { border-style: dashed; border-color: rgba(var(--m-theme-on-surface), var(--m-border-opacity)); }
+.cell.is-dirty .cell-input { border-color: rgb(var(--m-theme-primary)); background: rgb(var(--m-theme-surface-container)); }
+
+/* AI 已译：左侧信息色竖条（原 --chart-ai 的语义改由 info 通道承担） */
+.cell[data-status="ai"]::before { content: ""; position: absolute; left: 0; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: rgb(var(--m-theme-info)); }
+.cell[data-status="ai"] .cell-input { padding-left: 12px; }
+
+.cell-actions { margin-top: 4px; padding-left: 10px; }
+.cell-notes { margin-top: 4px; padding-left: 10px; }
+
+/* 词条列下方的「上下文与约束」常驻副行：常态虚线表明可填，悬停 / 聚焦转实线 */
+.ctx-inline { display: block; margin-top: 6px; }
+.ctx-input { height: 28px; padding: 0 8px; font-size: 12px; border-style: dashed; border-color: rgba(var(--m-theme-on-surface), var(--m-border-opacity)); background: transparent; }
+.ctx-input:hover, .ctx-input:focus { border-style: solid; }
+
+/* ---------- 启动占位：关闭预渲染后电路建立前的空白兜底。
+   交互内容渲染进来后占位不再是 body 的首个元素，自动隐藏——无需 JS。
+   主题变量此时尚未注入，var() 的第二参是功能性回退，让占位保持可读的中性灰。 ---------- */
+.boot-splash {
+  display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 40vh;
+  color: rgba(var(--m-theme-on-surface, 30 32 34), var(--m-medium-emphasis-opacity, 0.6));
+  font-size: 14px;
+}
+body > .boot-splash:not(:first-child) { display: none; }
+.ai-spinner {
+  width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(var(--m-theme-on-surface, 30 32 34), var(--m-border-opacity, 0.12));
+  border-top-color: rgba(var(--m-theme-on-surface, 30 32 34), var(--m-medium-emphasis-opacity, 0.6));
+  animation: ai-spin 700ms linear infinite;
+}
+@keyframes ai-spin { to { transform: rotate(360deg); } }
+
+/* 尊重系统级减少动态效果设置（与原 app.css 行为一致） */
+@media (prefers-reduced-motion: reduce) {
+  .ai-spinner { animation: none; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+}

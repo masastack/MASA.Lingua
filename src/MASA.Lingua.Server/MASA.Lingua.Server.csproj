@@ -15,6 +15,10 @@
     <PackageReference Include="Masa.Contrib.StackSdks.Pm" Version="1.2.1-preview.93" />
     <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.24.2-preview.1" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <!-- 管理后台 UI 组件库：版本与 masa-design 皮肤包的契约（masa-skin.json masaVersion）严格锁死，升级须与皮肤包同步 -->
+    <PackageReference Include="Masa.Blazor" Version="[1.12.0-alpha.2]" />
+    <!-- masa-design 皮肤（MASA Stack 品牌色，token-only）：来自 masa-blazor-theme-adaptation 的本地打包（见根目录 nuget.config 的 local-feed） -->
+    <PackageReference Include="MasaDesign.Blazor" Version="0.1.16" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\MASA.Lingua.Core\MASA.Lingua.Core.csproj" />

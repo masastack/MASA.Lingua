@@ -9,32 +9,25 @@
     <base href="/" />
     <title>MASA.Lingua 多语言支持与静态 JSON 分发平台</title>
     <link rel="icon" type="image/svg+xml" href="favicon.svg" />
-    <link rel="preload" href="fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href="fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin />
-    <link rel="stylesheet" href="app.css?v=@CssVersion" />
+    @* Masa.Blazor 组件库基础样式（皮肤 CSS 依赖它，必须在前） *@
+    <link rel="stylesheet" href="_content/Masa.Blazor/css/masa-blazor.min.css" />
+    @* MDI 图标字体（MIcon / MPagination 的 mdi-* 字形），自托管：内网部署不依赖外网 *@
+    <link rel="stylesheet" href="css/materialdesign/v6.x/css/materialdesignicons.min.css" />
+    @* masa-design 皮肤 token：scoped 到 html[data-skin="masa-design"]，属性由下面的首帧脚本设置 *@
+    <link rel="stylesheet" href="_content/MasaDesign.Blazor/masa-design-skin.css" />
+    <script>document.documentElement.setAttribute('data-skin', 'masa-design');document.documentElement.setAttribute('data-theme', 'light');</script>
+    @* 应用层唯一残留 CSS：词条矩阵原生输入形态 / 等宽字体 / 启动占位（全部 token 化，零颜色字面量） *@
+    <link rel="stylesheet" href="app-structure.css?v=@CssVersion" />
     <HeadOutlet @rendermode="InteractiveServerPrerenderOff" />
 </head>
 <body>
     <Routes @rendermode="InteractiveServerPrerenderOff" />
-    @* 关闭预渲染后电路建立前页面空白：放一个纯 CSS 管理显隐的静态占位（见 app.css .boot-splash） *@
+    @* 关闭预渲染后电路建立前页面空白：放一个纯 CSS 管理显隐的静态占位（见 app-structure.css 的 .boot-splash） *@
     <div class="boot-splash" role="status"><span class="ai-spinner" aria-hidden="true"></span>正在加载…</div>
+    @* Masa.Blazor 的组件级 JS（弹出层/抽屉/自动完成的定位等），必须先于 blazor.web.js 加载 *@
+    <script src="_content/Masa.Blazor/js/masa-blazor.js"></script>
     <script src="_framework/blazor.web.js"></script>
     <script>
-        // 顶栏的「翻译引擎」弹层：点击外部或按 Esc 关闭
-        (function () {
-            function closeEngine(except) {
-                document.querySelectorAll('details.engine[open]').forEach(function (d) {
-                    if (d !== except) d.removeAttribute('open');
-                });
-            }
-            document.addEventListener('click', function (e) {
-                closeEngine(e.target.closest ? e.target.closest('details.engine') : null);
-            });
-            document.addEventListener('keydown', function (e) {
-                if (e.key === 'Escape') closeEngine(null);
-            });
-        })();
-
         // 时间戳本地化：服务端按固定东八区渲染兜底文本，这里改写成访问者浏览器所在时区。
         // 用 MutationObserver 而不是逐组件 IJSRuntime 调用：词条矩阵一次渲染上百行，
         // 每行一次 interop 会把电路消息量放大一个数量级。
@@ -79,10 +72,10 @@
 
 @code {
     /// <summary>
-    /// app.css 没有指纹文件名，用文件的最后修改时间当查询串：
+    /// app-structure.css 没有指纹文件名，用文件的最后修改时间当查询串：
     /// 改完样式刷新即可生效，不需要手工维护版本号，也不会让浏览器继续吃旧样式。
     /// </summary>
-    private string CssVersion => Env.WebRootFileProvider.GetFileInfo("app.css").LastModified.ToUnixTimeSeconds().ToString();
+    private string CssVersion => Env.WebRootFileProvider.GetFileInfo("app-structure.css").LastModified.ToUnixTimeSeconds().ToString();
 
     /// <summary>
     /// 内部管理后台，无 SEO / 首屏静态化需求：关闭预渲染，

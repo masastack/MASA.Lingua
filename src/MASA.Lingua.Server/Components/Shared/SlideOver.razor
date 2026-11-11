@@ -1,33 +1,40 @@
 @* 右侧抽屉：承载「语种设置」「接入密钥」这类低频项目配置。
-   放在页头按钮里打开，而不是在页面正文里原地展开：正文里的设置面板会把词条矩阵推下去，且和列表共享同一个滚动区。
-   交互沿用站内确认弹窗的约定：点遮罩关闭、Esc 关闭、打开后焦点落在抽屉上（读屏器随即读出标题）。 *@
-@if (Open)
-{
-    <div class="drawer-layer" @onclick="CloseAsync">
-        <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="@_titleId" tabindex="-1"
-               @ref="_drawer" @onclick:stopPropagation="true" @onkeydown="OnKeyDownAsync">
-            <div class="drawer-head">
-                <div>
-                    <h2 id="@_titleId">@Title</h2>
-                    @if (!string.IsNullOrWhiteSpace(Intro))
-                    {
-                        <p class="meta">@Intro</p>
-                    }
-                </div>
-                <button class="x" type="button" aria-label="关闭" @onclick="CloseAsync">
-                    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
-                </button>
+   放在页头按钮里打开，而不是在页面正文里原地展开：正文里的设置面板会把词条矩阵推下去。
+   Masa.Blazor 的 fixed 定位类条件是 !Absolute && (App || Fixed)：Temporary 不会自动进入 fixed
+   （与 Vuetify2 不同），这里必须显式 Fixed，否则抽屉是文档流里的静态块而不是右侧浮层。
+   Fixed + Temporary 自带遮罩、Esc 关闭与焦点管理；组件自关时通过 OnClose 通知页面回写 Open。 *@
+<MNavigationDrawer @bind-Value="_open" @bind-Value:after="OnInternalChanged" Right Temporary Fixed Width="480">
+    @* MNavigationDrawer 内部有个 __content 滚动容器包裹 slot 内容——直接在子元素上写 flex-grow 不生效
+       （父是块级不是 flex）。这里用 height:100% 的 flex column 包装把整块内容撑到抽屉视口高度，
+       body 区 flex-grow:1 占据剩余空间、自身滚动，footer 永远贴底可见。 *@
+    <div class="d-flex flex-column" style="height: 100%; min-height: 100%;">
+        <div class="d-flex align-center justify-space-between px-4 pt-4" style="flex-shrink: 0;">
+            <div style="min-width:0">
+                <h2 class="text-h6">@Title</h2>
+                @if (!string.IsNullOrWhiteSpace(Intro))
+                {
+                    <p class="text-body-2">@Intro</p>
+                }
             </div>
-            <div class="drawer-body">
-                @ChildContent
+            <MButton Icon OnClick="CloseAsync" aria-label="关闭">
+                <MIcon>mdi-close</MIcon>
+            </MButton>
+        </div>
+        <MDivider Class="my-3" style="flex-shrink: 0;" />
+
+        <div class="px-4 pb-4 flex-grow-1" style="overflow-y: auto; min-height: 0;">
+            @ChildContent
+        </div>
+
+        @if (FooterContent is not null)
+        {
+            <MDivider style="flex-shrink: 0;" />
+            <div class="px-4 py-3" style="flex-shrink: 0;">
+                @FooterContent
             </div>
-            @if (FooterContent is not null)
-            {
-                <div class="drawer-foot">@FooterContent</div>
-            }
-        </aside>
+        }
     </div>
-}
+</MNavigationDrawer>
 
 @code {
     [Parameter] public bool Open { get; set; }
@@ -43,25 +50,28 @@
 
     [Parameter] public EventCallback OnClose { get; set; }
 
-    private readonly string _titleId = $"drawer-{Guid.NewGuid():N}";
-    private ElementReference _drawer;
-    private bool _focused;
+    private bool? _open;
+    private bool _pushed;
 
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    protected override void OnParametersSet()
     {
-        if (Open && !_focused)
+        // 页面改了 Open → 同步给抽屉；_pushed 用来区分「外部改的」和「组件自关的」
+        if (Open != _pushed)
         {
-            _focused = true;
-            await _drawer.FocusAsync();
-        }
-        else if (!Open)
-        {
-            _focused = false;
+            _open = Open;
+            _pushed = Open;
         }
     }
 
-    private Task CloseAsync() => OnClose.InvokeAsync();
+    private Task OnInternalChanged()
+    {
+        // Esc / 遮罩：抽屉自己关闭 → 通知页面（页面随后把 Open 置 false）
+        if (_open == false && _pushed)
+        {
+            return OnClose.InvokeAsync();
+        }
+        return Task.CompletedTask;
+    }
 
-    private Task OnKeyDownAsync(KeyboardEventArgs e) =>
-        e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+    private Task CloseAsync() => OnClose.InvokeAsync();
 }

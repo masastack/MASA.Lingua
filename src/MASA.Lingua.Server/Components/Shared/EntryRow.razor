@@ -3,32 +3,36 @@
    全部重建渲染树再 diff；这里只有「这一行用到的输入」变了才重渲染，其余行直接跳过。
 
    单元格编辑语义：输入只写进行内草稿（不落库、不重渲染），失焦后出现「保存 / 撤销」，Enter 保存、Esc 撤销。
-   以前是失焦即落库：改一个字、点别处、译文就进了库且没有提示，误操作只能靠再改一遍来补救。 *@
+   以前是失焦即落库：改一个字、点别处、译文就进了库且没有提示，误操作只能靠再改一遍来补救。
+
+   单元格输入保留原生 <input>（Masa 组件库标准的例外，见计划「残留 CSS 白名单」）：
+   MTextField 的值回传（无论 Immediate 还是防抖）都会把每个键击变成一次 Blazor 电路消息，
+   或者延迟草稿导致「Enter 保存」读到旧文本——矩阵一页上百格，这正是要避免的开销与语义破坏。 *@
 @implements IDisposable
 <tr>
     <td class="key" data-label="词条">
-        <span class="mono">
+        <code>
             @if (!string.IsNullOrEmpty(Entry.NamespaceCode))
             {
-                <span class="ns">@Entry.NamespaceCode.</span>
+                <span class="text--secondary">@Entry.NamespaceCode.</span>
             }
             @Entry.Key
-        </span>
+        </code>
         @if (!IsSharedScope && Impact is { InheritingProjects: > 0 } impact)
         {
-            <span class="pill sm tag" title="修改共享词条会影响所有继承它的项目@(impact.OverridingProjects > 0 ? "；已覆盖的项目：" + string.Join("、", impact.OverridingProjectCodes) : "")">
+            <MChip XSmall Class="mt-1" title="@InheritedTitle">
                 共享 · @(impact.InheritingProjects) 个项目继承@(impact.OverridingProjects > 0 ? $"、{impact.OverridingProjects} 个已覆盖" : "")
-            </span>
+            </MChip>
         }
         else if (IsSharedScope && Impact is { InheritingProjects: > 0 } sharedImpact)
         {
-            <span class="pill sm warn tag" title="@(sharedImpact.OverridingProjects > 0 ? "已覆盖的项目不受影响：" + string.Join("、", sharedImpact.OverridingProjectCodes) : "所有继承项目都会使用修改后的译文")">
+            <MChip XSmall Color="Warning" Class="mt-1" title="@SharedImpactTitle">
                 被 @(sharedImpact.InheritingProjects) 个项目继承、@(sharedImpact.OverridingProjects) 个项目已覆盖
-            </span>
+            </MChip>
         }
         @if (Entry.IsAutoReported)
         {
-            <span class="pill warn sm tag" title="由业务端运行时发现缺失后自动上报创建">自动上报</span>
+            <MChip XSmall Color="Warning" Class="mt-1" title="由业务端运行时发现缺失后自动上报创建">自动上报</MChip>
         }
         <div class="ctx-inline">
             <input class="cell-input ctx-input"
@@ -39,7 +43,7 @@
                    @onchange="@(e => OnContextEdited.InvokeAsync(e.Value?.ToString()))" />
             @if (Entry.MaxLength.HasValue)
             {
-                <span class="pill sm">长度 ≤ @Entry.MaxLength</span>
+                <MChip XSmall Class="ml-1">长度 ≤ @Entry.MaxLength</MChip>
             }
         </div>
     </td>
@@ -72,39 +76,39 @@
                        @onkeydown="@(e => OnCellKeyDownAsync(culture, e))" />
                 @if (dirty)
                 {
-                    <div class="cell-actions" role="group" aria-label="@($"{culture} 未保存的修改")">
-                        <span class="hint">未保存</span>
-                        <button class="btn sm primary" type="button" disabled="@Busy" @onclick="() => SaveCellAsync(culture)">保存</button>
-                        <button class="btn sm" type="button" disabled="@Busy" @onclick="() => RevertCell(culture)">撤销</button>
+                    <div class="cell-actions d-flex flex-wrap align-center" style="gap:6px" role="group" aria-label="@($"{culture} 未保存的修改")">
+                        <span class="text-caption">未保存</span>
+                        <MButton XSmall Color="Primary" Disabled="@Busy" OnClick="@(() => SaveCellAsync(culture))">保存</MButton>
+                        <MButton XSmall Disabled="@Busy" OnClick="@(() => RevertCell(culture))">撤销</MButton>
                         @if (overwritingApproved)
                         {
-                            <span class="hint warn-text" title="保存后这格译文会重新标记为已审核，原来的人工审核内容被替换">将覆盖已审核译文</span>
+                            <span class="text-caption warning--text" title="保存后这格译文会重新标记为已审核，原来的人工审核内容被替换">将覆盖已审核译文</span>
                         }
                     </div>
                 }
                 @if (needsReview || stale || notes.Count > 0)
                 {
-                    <div class="cell-notes">
+                    <div class="cell-notes d-flex flex-wrap align-center" style="gap:4px 8px">
                         @if (needsReview)
                         {
-                            <span class="pill warn sm" title="@ReviewHint(tr?.ReviewComment)">待复核</span>
+                            <MChip XSmall Color="Warning" title="@ReviewHint(tr?.ReviewComment)">待复核</MChip>
                         }
                         @if (stale)
                         {
-                            <span class="pill warn sm" title="这条译文是基于旧的源文案翻译的，重新确认或修改后会清除该标记">源文案已变更</span>
+                            <MChip XSmall Color="Warning" title="这条译文是基于旧的源文案翻译的，重新确认或修改后会清除该标记">源文案已变更</MChip>
                         }
                         @if (needsReview || stale)
                         {
-                            <button class="confirm-btn" type="button"
-                                    disabled="@Busy"
-                                    title="确认无误：保留现译文，恢复为已审核并清除标记；需修改则直接编辑单元格"
-                                    @onclick="() => OnTranslationEdited.InvokeAsync(new CellEdit(culture, currentText))">
+                            <MButton XSmall Outlined
+                                     Disabled="@Busy"
+                                     title="确认无误：保留现译文，恢复为已审核并清除标记；需修改则直接编辑单元格"
+                                     OnClick="@(() => OnTranslationEdited.InvokeAsync(new CellEdit(culture, currentText)))">
                                 确认
-                            </button>
+                            </MButton>
                         }
                         @foreach (var note in notes)
                         {
-                            <span class="issue @(note.Severity == IssueSeverity.Error ? "error" : "")" title="@note.RuleCode">@note.Message</span>
+                            <span class="text-caption @(note.Severity == IssueSeverity.Error ? "error--text" : "warning--text")" title="@note.RuleCode">@note.Message</span>
                         }
                     </div>
                 }
@@ -124,38 +128,39 @@
             };
             if (busyLabel is not null)
             {
-                <span class="ai-busy" role="status">
-                    <span class="ai-spinner" aria-hidden="true"></span>@busyLabel
-                </span>
+                <div class="d-flex align-center" style="gap:8px" Role="status">
+                    <MProgressCircular Indeterminate Size="16" Width="2" />
+                    <span class="text-caption">@busyLabel</span>
+                </div>
             }
             else
             {
-                <div class="ai-actions">
-                    <button class="btn sm" type="button"
-                            disabled="@(Busy || pendingCultures.Count == 0)"
-                            title="@(pendingCultures.Count == 0 ? "这条词条各语种译文都已就绪，没有缺失、草稿或待复核的内容" : "只翻译缺失、草稿与待复核的语种；已审核与 AI 已通过的译文不会被覆盖")"
-                            @onclick="() => OnRequestAi.InvokeAsync(false)">
+                <div class="d-flex flex-column" style="gap:6px">
+                    <MButton XSmall Outlined
+                             Disabled="@(Busy || pendingCultures.Count == 0)"
+                             title="@(pendingCultures.Count == 0 ? "这条词条各语种译文都已就绪，没有缺失、草稿或待复核的内容" : "只翻译缺失、草稿与待复核的语种；已审核与 AI 已通过的译文不会被覆盖")"
+                             OnClick="@(() => OnRequestAi.InvokeAsync(false))">
                         补全缺失 · @pendingCultures.Count 项
-                    </button>
+                    </MButton>
                     @* 有已审核译文时按钮转危险色：点之前就能看出这一下会弹确认，具体覆盖哪些语种看悬停提示 *@
-                    <button class="btn sm @(approvedCultures.Count > 0 ? "danger" : "")" type="button"
-                            disabled="@Busy"
-                            title="@EntryMatrix.OverwriteTitle(approvedCultures)"
-                            @onclick="() => OnRequestAi.InvokeAsync(true)">
+                    <MButton XSmall Outlined Color="Error"
+                             Disabled="@Busy"
+                             title="@EntryMatrix.OverwriteTitle(approvedCultures)"
+                             OnClick="@(() => OnRequestAi.InvokeAsync(true))">
                         重新翻译全部 · @TargetCultures.Count 个语种
-                    </button>
+                    </MButton>
                 </div>
             }
         }
-        @* 删除不依赖语种配置，固定排在 AI 按钮组下方：同为带边框的等宽按钮，仅文字用危险红区分层级 *@
-        <div class="del-row">
-            <button class="btn sm danger" type="button"
-                    disabled="@(Busy || AnyAiBusy)"
-                    title="删除这条词条及其全部语种的译文"
-                    @onclick="() => OnRequestDelete.InvokeAsync()">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M6.5 4.5V3h3v1.5M4.2 4.5l.6 9h6.4l.6-9M6.8 7v4.5M9.2 7v4.5" /></svg>
+        @* 删除不依赖语种配置，固定排在 AI 按钮组下方：同为带边框的等宽按钮，仅文字与图标用危险红区分层级 *@
+        <div class="mt-2">
+            <MButton XSmall Outlined Color="Error" Block
+                     Disabled="@(Busy || AnyAiBusy)"
+                     title="删除这条词条及其全部语种的译文"
+                     OnClick="@(() => OnRequestDelete.InvokeAsync())">
+                <MIcon Small Class="mr-1">mdi-delete-outline</MIcon>
                 删除词条
-            </button>
+            </MButton>
         </div>
     </td>
 </tr>
@@ -169,6 +174,18 @@
         string.IsNullOrWhiteSpace(comment)
             ? "确认无误点「确认」保留现译文并恢复为已审核；需修改则直接编辑单元格"
             : $"{comment}。确认无误点「确认」保留现译文并恢复为已审核；需修改则直接编辑单元格";
+
+    /// <summary>非共享词条的影响面悬停说明（含已覆盖项目清单）。</summary>
+    private string InheritedTitle =>
+        Impact is { OverridingProjects: > 0 } i
+            ? "修改共享词条会影响所有继承它的项目；已覆盖的项目：" + string.Join("、", i.OverridingProjectCodes)
+            : "修改共享词条会影响所有继承它的项目";
+
+    /// <summary>共享词条的影响面悬停说明。</summary>
+    private string SharedImpactTitle =>
+        Impact is { OverridingProjects: > 0 } s
+            ? "已覆盖的项目不受影响：" + string.Join("、", s.OverridingProjectCodes)
+            : "所有继承项目都会使用修改后的译文";
 
     /// <summary>这一行的 AI 状态：空闲 / 正在补全 / 正在重新翻译（决定 AI 列显示按钮还是进度）。</summary>
     public enum AiState

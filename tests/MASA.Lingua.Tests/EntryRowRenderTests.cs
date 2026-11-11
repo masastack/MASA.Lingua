@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Components.RenderTree;
 using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.JSInterop;
+using Masa.Blazor;
 using Xunit;
 
 // 这组测试要直接驱动 Renderer / RenderBatch 才能统计「这一行真正重渲染了几次」；不引入 bUnit 就绕不开这些框架内部类型。
@@ -26,7 +28,36 @@ namespace MASA.Lingua.Tests;
 /// </summary>
 public sealed class EntryRowRenderTests
 {
-    private static readonly IServiceProvider Services = new ServiceCollection().AddLogging().BuildServiceProvider();
+    private static readonly IServiceProvider Services = CreateServices();
+
+    private static IServiceProvider CreateServices()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        // EntryRow 迁移 Masa.Blazor 后的 MChip / MButton / MProgressCircular / MIcon 需要 MasaBlazor 服务
+        services.AddMasaBlazor();
+        // MButton / MChip 注入 NavigationManager（Href 处理用）
+        services.AddSingleton<Microsoft.AspNetCore.Components.NavigationManager>(new StubNavigationManager());
+        // MButton ripple 等 OnAfterRender 阶段的 JS 调用：测试渲染走短路桩
+        services.AddSingleton<IJSRuntime>(new StubJs());
+        return services.BuildServiceProvider();
+    }
+
+    private sealed class StubNavigationManager : Microsoft.AspNetCore.Components.NavigationManager
+    {
+        public StubNavigationManager() => Initialize("https://test.localhost/", "https://test.localhost/");
+
+        protected override void NavigateToCore(string uri, bool forceLoad) { }
+    }
+
+    private sealed class StubJs : IJSRuntime
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
+            ValueTask.FromResult(default(TValue)!);
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, CancellationToken cancellationToken, object?[]? args) =>
+            ValueTask.FromResult(default(TValue)!);
+    }
 
     private static readonly string[] AllCultures = ["zh-CN", "en-US", "ja-JP"];
     private static readonly string[] Targets = ["en-US", "ja-JP"];
@@ -157,11 +188,11 @@ public sealed class EntryRowRenderTests
     public async Task Namespace_Prefix_Shows_Only_For_Namespaced_Entries()
     {
         var namespaced = await RenderHtmlAsync(RowState.For(NewEntry(namespaceCode: "order")));
-        Assert.Contains(@"<span class=""ns"">order.</span>", namespaced);
+        Assert.Contains(@"<span class=""text--secondary"">order.</span>", namespaced);
 
         // 项目根（没有命名空间）：不显示前缀，也不拼出带前导点的 key
         var root = await RenderHtmlAsync(RowState.For(NewEntry(namespaceCode: null)));
-        Assert.DoesNotContain(@"class=""ns""", root);
+        Assert.DoesNotContain(@"<span class=""text--secondary"">", root);
         Assert.Contains(@"aria-label=""submit · zh-CN""", root);
     }
 
@@ -186,10 +217,10 @@ public sealed class EntryRowRenderTests
         // tooltip = 降级原因 + 操作指引（确认 / 直接修改）
         Assert.Contains("占位符需要复核。确认无误点「确认」保留现译文并恢复为已审核", html);
         Assert.Contains("源文案已变更", html);
-        // 待复核（en-US）与源文案已变更（ja-JP）的单元格都带「确认」按钮
-        Assert.Equal(2, Regex.Matches(html, ">\\s*确认\\s*</button>").Count);
-        Assert.Contains(@"<span class=""issue error"" title=""PLACEHOLDER_MISSING"">译文遗漏了占位符: {count}</span>", html);
-        Assert.Contains(@"<span class=""issue "" title=""EMPTY_TRANSLATION"">尚未提供译文</span>", html);
+        // 待复核（en-US）与源文案已变更（ja-JP）的单元格都带「确认」按钮（MButton 的内容 span）
+        Assert.Equal(2, Regex.Matches(html, @">\s*确认\s*</span>").Count);
+        Assert.Contains(@"<span class=""text-caption error--text"" title=""PLACEHOLDER_MISSING"">译文遗漏了占位符: {count}</span>", html);
+        Assert.Contains(@"<span class=""text-caption warning--text"" title=""EMPTY_TRANSLATION"">尚未提供译文</span>", html);
     }
 
     [Fact]
@@ -198,7 +229,7 @@ public sealed class EntryRowRenderTests
         // 全部已审核且没有 stale 标记：任何单元格都不出现确认按钮
         var clean = NewEntry(translations: [("en-US", "Submit", TranslationStatus.Approved)]);
         var cleanHtml = await RenderHtmlAsync(RowState.For(clean));
-        Assert.DoesNotMatch(">\\s*确认\\s*</button>", cleanHtml);
+        Assert.DoesNotMatch(@">\s*确认\s*</span>", cleanHtml);
 
         // 仅 en-US 待复核：确认按钮只出现在该语种的单元格
         var review = NewEntry(translations:
@@ -207,7 +238,7 @@ public sealed class EntryRowRenderTests
             ("ja-JP", "送信", TranslationStatus.Approved)
         ]);
         var reviewHtml = await RenderHtmlAsync(RowState.For(review));
-        Assert.Single(Regex.Matches(reviewHtml, ">\\s*确认\\s*</button>"));
+        Assert.Single(Regex.Matches(reviewHtml, @">\s*确认\s*</span>"));
     }
 
     [Fact]
@@ -218,7 +249,8 @@ public sealed class EntryRowRenderTests
         var idle = await RenderHtmlAsync(RowState.For(entry));
         Assert.Contains("补全缺失 · 1 项", idle);
         Assert.Contains("重新翻译全部 · 2 个语种", idle);
-        Assert.Contains(@"class=""btn sm danger""", idle);
+        // 有已审核译文会被覆盖：重新翻译按钮带危险色（MButton Error 的 Error--text）
+        Assert.Contains("Error--text", idle);
         Assert.Contains("会覆盖 1 项已人工审核的译文（en-US）", idle);
         Assert.False(IsDisabled(idle, "补全缺失"));
         Assert.False(IsDisabled(idle, "重新翻译全部"));

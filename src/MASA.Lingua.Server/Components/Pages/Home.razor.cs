@@ -530,8 +530,18 @@ public partial class Home
             return;
         }
 
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", key);
-        _statusMessage = "密钥已复制到剪贴板。";
+        // 与 CopyVersionHashAsync 同理：剪贴板异常不能炸电路
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", key);
+            _statusMessage = "密钥已复制到剪贴板。";
+            _statusIsError = false;
+        }
+        catch (JSException)
+        {
+            _statusMessage = "复制失败：浏览器未授权剪贴板或页面失去焦点。密钥已明文显示，请手动选中复制。";
+            _statusIsError = true;
+        }
     }
 
     private async Task RegenerateWriteKeyAsync()
@@ -761,8 +771,19 @@ public partial class Home
             return;
         }
 
-        await JS.InvokeVoidAsync("navigator.clipboard.writeText", hash);
-        _statusMessage = "版本指纹已复制到剪贴板。";
+        // 剪贴板 API 在文档无焦点 / 浏览器拒绝授权时会抛 JS 异常（NotAllowedError）：
+        // 不接住会顺着事件回调把整个 Blazor 电路炸掉（页面白屏、必须手动刷新）。
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", hash);
+            _statusMessage = "版本指纹已复制到剪贴板。";
+            _statusIsError = false;
+        }
+        catch (JSException)
+        {
+            _statusMessage = "复制失败：浏览器未授权剪贴板或页面失去焦点，请手动选中版本指纹复制。";
+            _statusIsError = true;
+        }
     }
 
     /// <summary>源语种（项目默认语种）；还没加载到项目时用 zh-CN 兜底。</summary>

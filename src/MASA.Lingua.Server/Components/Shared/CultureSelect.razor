@@ -1,68 +1,20 @@
-@* 可搜索的语种选择器：输入框 + 过滤后的列表。
-   为什么不用原生 <select>：语种目录有近 900 项，原生下拉只能靠「键入前缀跳转」，用户想找「Korean」或「韩语」
-   往往得先知道代码怎么写；这里改成输入即过滤（代码 / 本地名 / 英文名都能命中）。
-   键盘可达：上下键移动高亮、Enter 选中、Esc 收起；点组件外收起。 *@
-<div class="culture-picker @(Open ? "is-open" : "")" @onfocusout="OnFocusOut">
-    <div class="culture-picker-control">
-        <input class="input culture-picker-input"
-               type="text"
-               role="combobox"
-               aria-expanded="@(Open ? "true" : "false")"
-               aria-controls="@_listId"
-               aria-autocomplete="list"
+@* 可搜索的语种选择器：近 900 项的 ICU 目录不能靠原生 select 的「键入前缀跳转」，MAutocomplete 承担
+   下拉、键盘（上下/Enter/Esc）与焦点管理；过滤在这里自定义（代码 / 本地名 / 英文名 / 中文名，代码前缀优先），
+   且只把命中的前 MaxResults 项喂给组件——避免每次键击在 Blazor Server 电路里渲染近千行列表。 *@
+<MAutocomplete TItem="LinguaCultureOption" TItemValue="string" TValue="string"
+               Items="VisibleItems"
+               ItemText="o => LabelOf(o.Code)"
+               ItemValue="o => o.Code"
+               NoFilter="true"
+               Clearable="true"
+               Dense
+               Outlined
+               HideDetails="true"
+               Placeholder="@Placeholder"
                aria-label="@AriaLabel"
-               placeholder="@Placeholder"
-               value="@_query"
-               @oninput="OnQueryChanged"
-               @onfocus="OnFocus"
-               @onkeydown="OnKeyDownAsync" />
-        @if (!string.IsNullOrEmpty(Value))
-        {
-            <button class="culture-picker-clear" type="button" aria-label="清除选择的语种" tabindex="-1"
-                    @onmousedown:preventDefault="true" @onclick="ClearAsync">
-                <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
-            </button>
-        }
-    </div>
-
-    @if (Open)
-    {
-        <ul class="culture-picker-list" id="@_listId" role="listbox" aria-label="@AriaLabel">
-            @if (_matches.Count == 0)
-            {
-                <li class="culture-picker-empty" role="option" aria-selected="false" aria-disabled="true">
-                    没有匹配的语种。可试试英文名（Korean）或代码（ko-KR）。
-                </li>
-            }
-            else
-            {
-                @for (var i = 0; i < _matches.Count; i++)
-                {
-                    var option = _matches[i];
-                    var index = i;
-                    <li @key="option.Code" role="option"
-                        class="culture-picker-item @(index == _active ? "is-active" : "") @(IsSelected(option) ? "is-selected" : "")"
-                        aria-selected="@(IsSelected(option) ? "true" : "false")"
-                        @onmousedown:preventDefault="true"
-                        @onclick="() => SelectAsync(option)">
-                        <span class="culture-picker-native" lang="@option.Code">@option.NativeName</span>
-                        <span class="culture-picker-meta">
-                            @if (!string.IsNullOrEmpty(option.ChineseName) && !string.Equals(option.ChineseName, option.NativeName, StringComparison.Ordinal))
-                            {
-                                <span class="culture-picker-zh">@option.ChineseName</span>
-                            }
-                            <span class="mono">@option.Code</span>
-                        </span>
-                    </li>
-                }
-                @if (_matches.Count >= MaxResults)
-                {
-                    <li class="culture-picker-more" aria-hidden="true">继续输入可收窄结果…</li>
-                }
-            }
-        </ul>
-    }
-</div>
+               Value="@Value"
+               ValueChanged="OnSelected"
+               OnSearchInputUpdate="OnSearchInput" />
 
 @code {
     /// <summary>当前语种代码（选中项）。</summary>
@@ -77,30 +29,49 @@
 
     /// <summary>
     /// 除 ICU 目录外还必须可选的语种（通常是「本项目已在用的语种」与平台默认源语种）。
-    /// 这类代码是真实存在的预定义文化，但 ICU 的枚举结果里未必有（如 zh-CN 被规范成 zh-Hans-CN），
-    /// 不补进来就没法把它选回来。
+    /// 这类代码是真实存在的预定义文化，但 ICU 的枚举结果里未必有（如 zh-CN 被规范成 zh-Hans-CN）。
     /// </summary>
     [Parameter] public IReadOnlyCollection<string>? ExtraCodes { get; set; }
 
     /// <summary>不列入可选项的语种（例如项目已支持的语种，只允许在「新增」里选没选过的）。</summary>
     [Parameter] public IReadOnlyCollection<string>? ExcludeCodes { get; set; }
 
-    /// <summary>选中后是否清空搜索框（「新增语种」场景要清空，方便接着加下一个；「切换默认语种」要显示当前值）。</summary>
+    /// <summary>
+    /// 选中后是否清空搜索框（「新增语种」场景要清空方便接着加下一个；「切换默认语种」要显示当前值）。
+    /// MAutocomplete 是受控组件：页面在新增场景不回填 Value，输入框自然为空；切换场景回填 Value 即显示当前值。
+    /// 参数保留以兼容页面调用方。
+    /// </summary>
     [Parameter] public bool ClearAfterSelect { get; set; }
 
     /// <summary>列表最多同时渲染多少项：近 900 项全渲染会让每次键击都重建一张长列表。</summary>
     [Parameter] public int MaxResults { get; set; } = 50;
 
-    private readonly string _listId = $"culture-list-{Guid.NewGuid():N}";
     private List<LinguaCultureOption> _source = [];
-    private List<LinguaCultureOption> _matches = [];
+    private List<LinguaCultureOption> _visible = [];
     private IReadOnlyCollection<string>? _renderedExtra;
     private IReadOnlyCollection<string>? _renderedExclude;
-    private string _query = "";
-    private bool _open;
-    private int _active;
 
-    private bool Open => _open;
+    /// <summary>
+    /// 喂给 MAutocomplete 的候选集：当前过滤结果；选中项若不在其中（如 ExtraCode 或被过滤掉）补到最前，
+    /// 否则组件匹配不到选中项、无法回显选中值。
+    /// </summary>
+    private List<LinguaCultureOption> VisibleItems
+    {
+        get
+        {
+            if (Value is { Length: > 0 }
+                && _visible.All(o => !string.Equals(o.Code, Value, StringComparison.OrdinalIgnoreCase)))
+            {
+                var selected = _source.FirstOrDefault(o => string.Equals(o.Code, Value, StringComparison.OrdinalIgnoreCase))
+                    ?? LinguaCultures.WithExtraCodes([Value]).FirstOrDefault();
+                if (selected is not null)
+                {
+                    return [selected, .. _visible];
+                }
+            }
+            return _visible;
+        }
+    }
 
     protected override void OnParametersSet()
     {
@@ -115,108 +86,27 @@
             _source = ExcludeCodes is { Count: > 0 }
                 ? pool.Where(c => !ExcludeCodes.Contains(c.Code, StringComparer.OrdinalIgnoreCase)).ToList()
                 : [.. pool];
-            RebuildMatches();
-        }
-
-        // 未聚焦时输入框回显当前选中的语种；聚焦后是搜索词
-        if (!_open)
-        {
-            _query = Value is { Length: > 0 } ? LabelOf(Value) : "";
+            _visible = FilterPool("");
         }
     }
 
-    private void OnQueryChanged(ChangeEventArgs e)
-    {
-        _query = e.Value?.ToString() ?? "";
-        RebuildMatches();
-    }
+    /// <summary>键入搜索词：只重算候选集，不触发父页面重渲染。</summary>
+    private void OnSearchInput(string? query) => _visible = FilterPool(query ?? "");
 
-    private void OnFocus()
-    {
-        if (_open)
-        {
-            return;
-        }
-
-        _open = true;
-        _query = "";
-        RebuildMatches();
-    }
-
-    /// <summary>焦点离开整块时收起：不选也把输入框恢复成当前值。</summary>
-    private void OnFocusOut(FocusEventArgs e)
-    {
-        if (!_open)
-        {
-            return;
-        }
-
-        // 选项的点击先 mousedown 阻止默认行为，焦点不会在选中前离开，这里可以安全收起
-        _open = false;
-        _query = Value is { Length: > 0 } ? LabelOf(Value) : "";
-    }
-
-    private async Task OnKeyDownAsync(KeyboardEventArgs e)
-    {
-        switch (e.Key)
-        {
-            case "ArrowDown":
-                if (!_open)
-                {
-                    OnFocus();
-                }
-                else
-                {
-                    _active = _matches.Count == 0 ? 0 : Math.Min(_active + 1, _matches.Count - 1);
-                }
-                break;
-            case "ArrowUp":
-                _active = Math.Max(_active - 1, 0);
-                break;
-            case "Enter":
-                if (_open && _matches.Count > 0)
-                {
-                    await SelectAsync(_matches[Math.Clamp(_active, 0, _matches.Count - 1)]);
-                }
-                break;
-            case "Escape":
-                OnFocusOut(new FocusEventArgs());
-                break;
-        }
-    }
-
-    private async Task SelectAsync(LinguaCultureOption option)
-    {
-        _open = false;
-        _query = ClearAfterSelect ? "" : LabelOf(option.Code);
-        await ValueChanged.InvokeAsync(option.Code);
-    }
-
-    private async Task ClearAsync()
-    {
-        _open = true;
-        _query = "";
-        RebuildMatches();
-        await ValueChanged.InvokeAsync("");
-    }
-
-    private bool IsSelected(LinguaCultureOption option) =>
-        string.Equals(option.Code, Value, StringComparison.OrdinalIgnoreCase);
+    private Task OnSelected(string? value) => ValueChanged.InvokeAsync(value ?? "");
 
     /// <summary>
-    /// 过滤：代码前缀优先，其次「代码 / 本地名 / 英文名」包含。
+    /// 过滤：代码前缀优先，其次「代码 / 本地名 / 英文名 / 中文名」包含。
     /// 只保留前 <see cref="MaxResults"/> 项——用户继续输入就能收窄，不必把 900 项全渲出来。
+    /// 空搜索词：目录最前面的一段（按代码排序，等于「从头看」）。
     /// </summary>
-    private void RebuildMatches()
+    private List<LinguaCultureOption> FilterPool(string query)
     {
-        var query = _query.Trim();
+        query = query.Trim();
 
-        // 空搜索词：给出目录最前面的一段（按代码排序，等于「从头看」）
         if (query.Length == 0)
         {
-            _matches = _source.Take(MaxResults).ToList();
-            _active = 0;
-            return;
+            return _source.Take(MaxResults).ToList();
         }
 
         var prefix = _source
@@ -233,8 +123,7 @@
                 o.ChineseName.Contains(query, StringComparison.OrdinalIgnoreCase))
             .OrderBy(o => o.Code, StringComparer.Ordinal);
 
-        _matches = prefix.Concat(contains).Take(MaxResults).ToList();
-        _active = 0;
+        return prefix.Concat(contains).Take(MaxResults).ToList();
     }
 
     private static string LabelOf(string code) => $"{code} · {LinguaCultures.GetName(code)}";
