@@ -6,6 +6,20 @@ All notable changes to MASA.Lingua are documented in this file. The format follo
 
 ## [Unreleased]
 
+## [0.0.1-preview.2]
+
+Packaging fixes shipped after the `0.0.1-preview.1` packages were pushed (the `0.0.1-preview.1` packages on nuget.org were built from the initial release tag and do not include these changes).
+
+### Added
+
+- Key-path conflict detection in the publish gate (`KEY_PATH_CONFLICT`): a root bare key coexisting with a same-named namespace (or duplicate full paths) would silently lose one side's text in nested publish JSON. A new `BlockOnKeyPathConflicts` policy switch (default: on) lets projects that consume the flat format opt out; gate reports list at most 5 conflicts, then summarize the rest.
+- Publish manifest: each culture now carries an optional `flatUrl` for the flat-format bundle (`?format=flat`).
+
+### Fixed
+
+- Bundle ETag / version fingerprint now hashes nested and flat JSON together: for key-path-conflict entries whose text only appears in the flat file, editing the translation previously left the fingerprint (and every client ETag) unchanged, so clients never received the update.
+- .NET SDK packages (`AspNetCore` / `MasaBlazor` / `Maui`) now prefer the flat-format bundle when downloading (manifest `flatUrl`, or `?format=flat` for SSE-driven syncs), falling back to the nested URL when the server does not provide it.
+
 ## [0.0.1-preview.1]
 
 First public preview of MASA.Lingua, open-sourced under the Apache License 2.0.

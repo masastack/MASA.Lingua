@@ -20,7 +20,7 @@
     PackageId 未显式声明，默认取程序集名（MASA.Lingua.Core / MASA.Lingua.SDK.*），与包名约定一致。
   -->
   <PropertyGroup Condition="'$(MSBuildProjectName)' == 'MASA.Lingua.Core' Or $(MSBuildProjectName.StartsWith('MASA.Lingua.SDK.'))">
-    <Version>0.0.1-preview.1</Version>
+    <Version>0.0.1-preview.2</Version>
     <Authors>MASA</Authors>
     <Owners>MASA</Owners>
     <Copyright>Copyright © MASA</Copyright>

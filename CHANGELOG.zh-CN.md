@@ -6,6 +6,20 @@ MASA.Lingua 的所有显著变更记录于此。格式遵循 [Keep a Changelog](
 
 ## [Unreleased]
 
+## [0.0.1-preview.2]
+
+`0.0.1-preview.1` 的包推送之后落地的打包修复（nuget.org 上的 `0.0.1-preview.1` 包由最初的发布 tag 构建，不含本节变更）。
+
+### 新增
+
+- 发布门禁新增键路径冲突检测（`KEY_PATH_CONFLICT`）：项目根裸 key 与同名命名空间共存（或完整路径重复）时，嵌套发布 JSON 会丢失其中一侧文案。新增策略开关 `BlockOnKeyPathConflicts`（默认开启）；按扁平格式取词的项目可以关闭本检查。门禁摘要最多逐条列出 5 处冲突，超出部分汇总。
+- 发布清单：每个语种新增可选 `flatUrl` 字段，指向扁平格式产物（`?format=flat`）。
+
+### 修复
+
+- 包 ETag / 版本指纹改为同时覆盖嵌套与扁平两种字节：键路径冲突词条的文案只存在于扁平文件中，此前修改译值时指纹（与客户端 ETag）纹丝不动，客户端永远收不到更新。
+- .NET SDK 包（`AspNetCore` / `MasaBlazor` / `Maui`）下载语言包时优先使用扁平格式（清单 `flatUrl`；SSE 触发的同步用 `?format=flat` 拼接），服务端未提供时回退嵌套地址。
+
 ## [0.0.1-preview.1]
 
 MASA.Lingua 首个公开预览版，以 Apache License 2.0 开源。
