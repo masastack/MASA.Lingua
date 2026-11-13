@@ -4,7 +4,7 @@
     <Description>EF Core persistence provider for MASA.Lingua targeting PostgreSQL.</Description>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.14" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.15" />
     <!-- EF Core 各包必须同版本：Npgsql 提供程序只传递 Relational >= 10.0.4，不显式固定会出现 EFCore 10.0.14 + Relational 10.0.4 的混装（MSB3277） -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.14" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.3" />
