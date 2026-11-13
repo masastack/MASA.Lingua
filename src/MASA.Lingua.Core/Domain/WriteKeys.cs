@@ -5,7 +5,7 @@ namespace MASA.Lingua.Core.Domain;
 /// <summary>
 /// 项目写密钥（缺词上报鉴权）的生成与校验。
 /// <para>
-/// 密钥格式：<c>lingua_sk_</c> + 32 位随机 hex（256 位熵），仅在创建 / 重置时生成一次并明文展示，
+/// 密钥格式：<c>lingua_sk_</c> + 32 位随机 hex（16 字节 = 128 位熵），仅在创建 / 重置时生成一次并明文展示，
 /// 之后只能重置。校验走 SHA-256 + <see cref="CryptographicOperations.FixedTimeEquals"/> 防时序侧信道。
 /// </para>
 /// <para>

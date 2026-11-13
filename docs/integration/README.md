@@ -14,7 +14,7 @@
 | 构建期（拉取兜底包、导入存量、CI 检查） | [cli.md](cli.md) | `lingua-sync`（`pull` / `push` / `check`） | — |
 
 > 除 MAUI 与 Masa.Blazor 外，文档里的写法都在真实的示例工程里编译、运行并对着一个 Lingua 服务端验证过。
-> MAUI 的核心逻辑有自动化测试（`tests/MASA.Lingua.Tests/MauiClientTests.cs`，10 条），但 MAUI 专有部分
+> MAUI 的核心逻辑有自动化测试（`tests/MASA.Lingua.Tests/MauiClientTests.cs`，27 条），但 MAUI 专有部分
 > （XAML 绑定、`App.xaml.cs`、资源打包）没有在真机 / 模拟器上跑过；
 > Masa.Blazor 包有两处**真实消费方**（MASA.Auth 的 SSO 门户：`AddLinguaForMasaBlazor` + `AddLinguaMasaI18n` 同宿主），
 > 但仓内**没有自动化测试**（`tests/` 里没有引用该包），改动后请按文末「验证过什么」自行冒烟。
@@ -61,7 +61,7 @@
 |---|---|---|
 | 运行时 | **.NET 10** | `MASA.Lingua.Server` 及服务端依赖闭包（Storage / AI / Migrations）单目标 net10 |
 | 客户端 SDK | **.NET 8 或 .NET 10** | `MASA.Lingua.Core` + 5 个 `SDK.*` 包（Core / Abstractions / AspNetCore / MasaI18n / MasaBlazor / Maui，共 6 个）均为 `net8.0;net10.0` 双目标，引用方按自身 TFM 自动选资产 |
-| 数据库 | **PostgreSQL（唯一支持）** | 已移除 SQLite；连接串只认 `Lingua:Database:ConnectionString`（或 `ConnectionStrings:LinguaDb`） |
+| 数据库 | **PostgreSQL（唯一支持）** | 已移除 SQLite；连接串只认 `Lingua:Database:ConnectionString`（或 `ConnectionStrings:LinguaDb`）。凭据不入仓库：仓库内各 appsettings 的数据库连接串 / DCC Redis 密码一律留空，部署时通过环境变量 `Lingua__Database__ConnectionString`（Redis 用 `DCC__RedisOptions__Password`）注入，本地开发用 `dotnet user-secrets` 提供 |
 | 副本数 | **单实例** | 发布缓存、manifest 统计与 SSE 广播都是**进程内状态**，站点不做跨实例校验：多副本部署会静默出错——A 实例发布后，B 实例继续吐旧 bundle，且 B 上的 SSE 客户端永远收不到发布事件。如需横向扩展，必须先把发布缓存与事件广播外置到共享存储（如 Redis），再放开副本数 |
 | 发布产物目录 | `Lingua:BundleDirectory`（默认 `{ContentRoot}/App_Data/i18n`） | 只用于重启恢复与磁盘一致性校准，**不对公网暴露**（`/i18n/*` 永远走分发端点）。官方镜像以非 root（UID 1000，appuser，对齐 specdoc 的挂卷属主约定）运行，并已内置 `Lingua__BundleDirectory=/data/i18n`（权限 1777，任意运行 UID 可写，覆盖 `runAsUser` 的场景）；若把它挂成卷或覆盖此变量，请保证目录对实际运行用户可写（K8s 可用 `fsGroup`）；`readOnlyRootFilesystem` 下需把该路径挂成 `emptyDir`/卷。该目录可丢弃，容器重建后会从数据库发布快照补回 |
 | 崩溃取证目录 | `Lingua:LogsDirectory`（镜像内置 `/data/logs`）；dump 目录镜像内置 `/data/dumps` | 文件日志与崩溃记录（crash.log）落日志目录；未处理异常的 minidump 落 dump 目录（`DOTNET_DbgMiniDump*`）。都随 `/data` 挂卷跨重启留存 |
@@ -95,7 +95,7 @@ GET {服务地址}/api/v1/projects/{项目}/glossary          # 生效术语库�
 GET {服务地址}/api/v1/projects/{项目}/export-zip        # 导出**当前编辑状态**（含未发布草稿）的全部语种 zip，支持 ?format=flat
 GET {服务地址}/api/v1/stream?project={项目}             # SSE：发布 / 回滚时推送，15s 心跳，retry: 3000
 POST {服务地址}/api/v1/projects/{项目}                  # 幂等创建项目骨架；新建返回写密钥，已存在则 200 不改配置
-DELETE {服务地址}/api/v1/projects/{项目}                # 删除项目（词条/术语/发布历史级联清除；磁盘产物不清理）
+DELETE {服务地址}/api/v1/projects/{项目}                # 删除项目（词条/术语/发布历史级联清除；服务端的发布缓存与磁盘产物一并清理，同名重建后需重新发布才有 manifest）
 POST {服务地址}/api/v1/telemetry/missing-keys           # 缺失词条上报，请求体 { projectCode, culture, items }；需写密钥（仅服务端 SDK）
 POST {服务地址}/api/v1/projects/{项目}/import-json?culture=&defaultNs=&publish=   # 导入草稿，publish=true 时立即发布；请求体上限 10MB，超限 413
 ```
@@ -119,7 +119,9 @@ SSE 事件带 `id:`（单调递增的发布时刻）。浏览器 `EventSource` �
 **SSE 只承载「变了」这个通知，不承载文案内容**：内容永远由客户端按 ETag 主动拉取。因此事件丢失、
 重复、乱序都只影响延迟，不影响正确性；SDK 另有空闲对账兜底，最迟一个周期追上线上版本。
 
-`format=flat` 与嵌套格式的 ETag 不同（同一内容的两种表示），混用时缓存不会串。
+`format=flat` 与嵌套格式是同一内容的两种表示，**共用同一个 ETag**（由同时覆盖两种字节的内容指纹派生：任一表示变化，ETag 都会变化）；
+HTTP 缓存按完整 URL（含 `?format=flat`）分条目，混用不会串。**.NET 客户端 SDK（MAUI / ASP.NET / Blazor）一律下载扁平格式**——
+手动下载内置语言包 / 自己写同步脚本给 .NET 用时，也请带上 `?format=flat`。
 
 词条在 JSON 里按 `.` 分层。同一个词条在各端的写法：
 
@@ -133,6 +135,24 @@ SSE 事件带 `id:`（单调递增的发布时刻）。浏览器 `EventSource` �
 
 译文没有「已批准」的语种词条，发布时会回退成源语种文案，客户端看到的是源语种文字而不是 key。
 
+**Key 与命名空间同名 / 键路径冲突**：
+
+- 命名空间 `Confirm` + 其下词条 `Confirm`（取词写 `Confirm.Confirm`）**不冲突**，是两个层级的名字。
+- 项目根的裸 key `Confirm` 与命名空间 `Confirm`（含 `Confirm.Title` 等词条）**会冲突**：嵌套 JSON 里 `"Confirm"` 这个位置
+  不能既是字符串又是对象，嵌套文件只保留命名空间一侧；扁平文件两侧都保留（`"Confirm"` 与 `"Confirm.Title"` 并存）。
+  同理，词条 `A/B` 与根 key `A.B`、根 key `A` 与根 key `A.B` 也会撞同一个位置。
+- 平台对这类冲突的处理：发布门禁默认**阻断**（`KEY_PATH_CONFLICT`，可强制发布并留痕，或在发布策略里关闭阻断）；
+  导入、手工新增会当场提示 / 拦截；客户端缺词上报会**忽略**会产生冲突的 key（不会替你建出必然冲突的词条）。
+  只按扁平格式取词的项目（所有 .NET SDK 都是）可以在发布策略里放行，但 Vue 等嵌套消费方仍会丢掉被挤掉的一侧——**建议直接改名消除冲突**。
+- **大小写：命名空间编码与 Key 一律忽略大小写**，`Confirm` 与 `confirm` 是同一个命名空间 / Key，不可能同时存在：
+  - 存储层按 `lower(...)` 唯一；用不同大小写写入已存在的词条（后台新增、导入、缺词上报）都是**更新**，库里与发布产物保留**首次创建时的写法**。
+    导入文件里仅大小写不同的重复项会被合并，并在导入结果里提示（`caseDuplicateCount` / `caseDuplicates`）。
+  - 服务端与所有 .NET SDK（ASP.NET / Blazor / MAUI / MasaI18n）取词都忽略大小写：后台录的是 `Confirm.Title`，代码里写 `confirm.title`
+    也能取到；`IStringLocalizer<OrderController>` 这类按类型解析的写法（前缀 `order.`）能找到命名空间 `Order`。
+  - 例外：**Vue（vue-i18n）等 JS 运行时按大小写敏感取词**，要使用发布产物里的写法。
+  - 升级须知：迁移会把唯一索引换成忽略大小写版本，库里若已有仅大小写不同的命名空间 / Key，迁移会中止并列出它们
+    （不改任何数据），处理掉重复项后重新启动即可。
+
 ### 3. 访问策略
 
 分发**读端点匿名**（站点部署在内网，读发布产物不需要凭据，SDK、CLI 与浏览器均可直接调用）；
@@ -141,9 +161,20 @@ SSE 事件带 `id:`（单调递增的发布时刻）。浏览器 `EventSource` �
 
 - 导入端点的门禁是**项目必须存在**：项目编码写错时导入返回 404，不会凭空创建项目；创建项目要走显式的
   `POST /api/v1/projects/{项目}`（幂等）。
-- **其余写类端点仍是匿名的**：`POST /api/v1/projects/{项目}` 能创建项目、`DELETE /api/v1/projects/{项目}` 能删除项目、
+- **其余写类端点默认匿名**：`POST /api/v1/projects/{项目}` 能创建项目、`DELETE /api/v1/projects/{项目}` 能删除项目、
   `POST …/import-json?publish=true` 能改线上文案，`GET …/export-zip` 能拉走全量草稿。站点必须只在受控网段内暴露；
-  一旦端口可达公网，任何能连上的人都能改文案、删项目。
+  一旦端口可达公网，任何能连上的人都能改文案、删项目。作为纵深防御，可配置共享密钥
+  `Lingua:Distribution:WriteApiKey`（环境变量 `Lingua__Distribution__WriteApiKey`）：配置后上述四个端点必须携带
+  `X-Lingua-Key` 请求头且与密钥匹配（缺失 401、不匹配 403），脚本化接入在请求头里带上密钥即可；留空（或全是空白）维持匿名（默认，内网部署）。
+  - 这把共享密钥与项目的**写密钥**（缺词上报用，每个项目一把）是两回事，互不通用；它只守上面四个写类端点，读端点与缺词上报不受影响。
+  - 密钥必须是高熵随机串（建议 ≥ 32 字符，如 `openssl rand -base64 32`），只通过环境变量 / 密钥管理注入，**不要写进仓库里的 appsettings**
+    （仓库里 `Lingua:Distribution:WriteApiKey` 保持留空）。校验是常量时间比较，但抵挡不了弱密钥被猜。
+  - **`lingua-sync push` 要带密钥**：`--key <密钥>` 或环境变量 `LINGUA_WRITE_KEY`（CI 请用 secret + 环境变量，避免密钥出现在进程列表里；
+    CLI 不从 `lingua.config.json` 读密钥）。见 [cli.md](cli.md)。
+  - **管理后台「下载全语种 ZIP」不受影响**：它走独立的 SSO 路由 `GET /admin/projects/{项目}/export-zip`（未登录 302 到 `/login`），
+    浏览器导航带不了请求头，所以不用共享密钥；脚本 / CLI 想导出仍走上面带密钥的 `GET /api/v1/projects/{项目}/export-zip`。
+- 项目编码（PM Identity）在创建端点与仓储层统一校验：只允许字母 / 数字 / 连字符（-）/ 下划线（_），长度 1–64——
+  编码会用作发布产物目录名（`App_Data/i18n/{code}`），含路径分隔符或「..」的编码会被 400 拒绝，防止路径穿越。
 - 管理后台（`/`、`/glossary`、`/import-export` 三个页面）走 **SSO 强制登录**，与上面的机器调用是两套鉴权，互不影响。
 - 浏览器跨域**全放开**（`Access-Control-Allow-Origin: *`），任意来源的 Vue / Blazor Wasm 都能直接读；
   暴露 `ETag` 供客户端做条件请求。
@@ -155,6 +186,8 @@ SSE 事件带 `id:`（单调递增的发布时刻）。浏览器 `EventSource` �
 |---|---|
 | manifest / `{culture}.json` 返回 404 | 项目编码写错，或项目还没发布 |
 | 导入返回 404 | 项目编码写错（平台不会自动创建项目） |
+| 创建 / 删除 / 导入 / 导出返回 401 / 403 | 服务端配置了 `Lingua:Distribution:WriteApiKey`：401 = 请求没带 `X-Lingua-Key`；403 = 密钥与服务端配置不一致。`lingua-sync push` 用 `--key` / `LINGUA_WRITE_KEY` 提供（注意这不是项目的写密钥） |
+| 创建项目返回 400「项目编码不合法」 | 编码含字母 / 数字 / `-` / `_` 以外的字符，或超过 64 位（编码会用作发布产物目录名，不能含路径分隔符、`..`、空格、中文） |
 | 页面显示 key 本身（如 `errors.UserNotExist`） | 当前语种和默认语种里都没有这个 key；或还没发布 |
 | 页面显示 `{count}` | 取词时没传占位符参数 |
 | 缺失词条上报没反应 | 服务端返回 404：项目编码不存在；401：请求未带 `X-Lingua-Key`；403：密钥不匹配（与项目的写密钥不一致，重置过要同步更新配置）。成功时返回 `addedCount`。另外：`EnableMissingKeyTelemetry = false`、`ServerEndpoint` 为空、或 `WriteKey` 未配置时，客户端**根本不发请求**（后者只记一条进程级 Warning） |

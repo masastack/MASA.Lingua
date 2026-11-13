@@ -4,12 +4,15 @@ using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Localization;
 using MASA.Lingua.Core.Publishing;
 using MASA.Lingua.Core.Serialization;
+using MASA.Lingua.Server.Options;
 using MASA.Lingua.Server.Services;
+using MASA.Lingua.Server.Startup;
 using MASA.Lingua.Storage.EfCore;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace MASA.Lingua.Server.Endpoints;
 
@@ -165,6 +168,7 @@ public static class LinguaDistributionEndpoints
                 return Results.StatusCode(StatusCodes.Status403Forbidden);
             }
 
+            // addedCount 只统计真正新建的草稿词条：已存在的、本批重复的、以及与现有词条键路径冲突的上报都不计入
             var added = await entryCatalog.RecordMissingKeysAsync(report, ct);
             return Results.Ok(new { project = report.ProjectCode, addedCount = added });
         });
@@ -174,15 +178,33 @@ public static class LinguaDistributionEndpoints
         // 创建 → 导入 → 发布 都走 HTTP。幂等：项目已存在时返回 200 且不改动任何配置。
         // 骨架默认值与实体一致：DefaultCulture zh-CN、SupportedCultures zh-CN/en-US/ja-JP、
         // SharedNamespaceCodes ["common"]；语种在导入时按需自动补齐（LinguaCultures.Resolve 校验 + 追加）。
+        // 配置了 Lingua:Distribution:WriteApiKey 时走共享密钥门禁（见 RejectUnauthorizedWrite）。
         app.MapPost("/api/v1/projects/{project}", async (
             string project,
+            HttpRequest request,
+            IOptions<LinguaDistributionOptions> writeGate,
             IProjectCatalog projects,
             CancellationToken ct) =>
         {
+            if (RejectUnauthorizedWrite(request, writeGate.Value) is { } rejected)
+            {
+                return rejected;
+            }
+
             var code = project.Trim();
             if (string.IsNullOrWhiteSpace(code))
             {
                 return Results.BadRequest(new { error = "项目编码不能为空。" });
+            }
+
+            // 编码会用作发布产物目录名（App_Data/i18n/{code}）参与磁盘路径：拒绝路径分隔符 /「..」等，
+            // 防止匿名创建出能把发布产物写到 i18n 目录之外的项目（仓储层与发布器用同一套规则兜底）
+            if (!LinguaProjectCodes.IsValid(code))
+            {
+                return Results.BadRequest(new
+                {
+                    error = "项目编码不合法：只允许字母、数字、连字符（-）与下划线（_），长度 1–64。"
+                });
             }
 
             // 只判断存在性并回显默认语种：用摘要查询，不加载词条树
@@ -192,25 +214,50 @@ public static class LinguaDistributionEndpoints
                 return Results.Ok(new { project = existing.Code, defaultCulture = existing.DefaultCulture, created = false });
             }
 
-            var created = await projects.CreateProjectAsync(code, ct);
+            var result = await projects.CreateProjectIfAbsentAsync(code, ct);
+
+            // 并发创建同一编码时唯一索引只放行一个：输家拿到的是赢家创建的项目，必须按「已存在」应答（幂等），
+            // 且绝不能带写密钥——否则没有创建项目的一方也能拿到上报凭据。
+            if (!result.Created)
+            {
+                return Results.Ok(new { project = result.Project.Code, defaultCulture = result.Project.DefaultCulture, created = false });
+            }
+
             // 新建时一并返回生成的写密钥（缺词上报鉴权），脚本化接入不需要再进管理后台查一次；
             // 已存在的项目不带密钥返回——要拿密钥去管理后台「接入密钥」面板。
-            return Results.Ok(new { project = created.Code, defaultCulture = created.DefaultCulture, created = true, writeKey = created.WriteKey });
+            return Results.Ok(new
+            {
+                project = result.Project.Code,
+                defaultCulture = result.Project.DefaultCulture,
+                created = true,
+                writeKey = result.Project.WriteKey
+            });
         });
 
         // 4b. 项目删除端点：DELETE /api/v1/projects/{project}
         // 与创建端点配套，供应用编码变更（如 PM 应用清单调整）后清理遗留项目：先删发布历史
         // （publish_snapshots 对 projects 是 ON DELETE RESTRICT），项目本体及其命名空间 / 词条 / 译文 / 术语
-        // 由外键级联清除。项目不存在返回 404。磁盘上的发布产物（App_Data/i18n/{code}）不在此处清理。
+        // 由外键级联清除。项目不存在返回 404。库删除成功后，再清掉发布器里该项目的线上产物
+        // （内存缓存 / manifest 统计 / SSE 补发记录 / 磁盘目录 App_Data/i18n/{code}），
+        // 否则分发端点会继续吐已删项目的旧语言包，同名重建后还没发布就能读到旧内容。
+        // 配置了 Lingua:Distribution:WriteApiKey 时走共享密钥门禁（见 RejectUnauthorizedWrite）。
         app.MapDelete("/api/v1/projects/{project}", async (
             string project,
-            IProjectCatalog projects,
+            HttpRequest request,
+            IOptions<LinguaDistributionOptions> writeGate,
+            StaticBundlePublisher publisher,
             CancellationToken ct) =>
         {
+            if (RejectUnauthorizedWrite(request, writeGate.Value) is { } rejected)
+            {
+                return rejected;
+            }
+
             var code = project.Trim();
 
-            // 走仓储而不是直连数据库：仓储负责清发布历史 + 删项目的事务，并让读缓存随删除失效
-            if (!await projects.DeleteProjectAsync(code, ct))
+            // 删除项目一律走发布器的 DeleteProjectAsync：它先经仓储删库（清发布历史 + 删项目的事务，读缓存随之失效），
+            // 成功后再清发布器里的内存缓存 / 磁盘产物 / SSE 补发记录——「删库必须伴随清产物」收敛在一处，不靠端点记得调用。
+            if (!await publisher.DeleteProjectAsync(code, ct))
             {
                 return Results.NotFound(new { error = $"Project '{code}' not found." });
             }
@@ -228,10 +275,17 @@ public static class LinguaDistributionEndpoints
             string? defaultNs,
             bool? publish,
             HttpRequest request,
+            IOptions<LinguaDistributionOptions> writeGate,
             IEntryCatalog entryCatalog,
             StaticBundlePublisher publisher,
             CancellationToken ct) =>
         {
+            // 写类端点的可选共享密钥门禁：留空 = 匿名（内网默认），配置后导入（含 publish=true 直接上线）必须携带密钥
+            if (RejectUnauthorizedWrite(request, writeGate.Value) is { } rejected)
+            {
+                return rejected;
+            }
+
             // 请求体上限：UI 文件选择限 5MB，这里留一倍余量；没有上限时一个超大 POST 就能把
             // 整份字节读进内存再解析成词条树，内存尖峰直接由外部请求触发（无需登录）。
             using var ms = new MemoryStream();
@@ -291,30 +345,44 @@ public static class LinguaDistributionEndpoints
                 result.AffectedNamespaces,
                 result.FlaggedIssues,
                 result.StaleMarked,
+                result.PathConflictCount,
+                result.PathConflicts,
+                result.CaseDuplicateCount,
+                result.CaseDuplicates,
                 published,
                 publishBlockedReason
             });
         });
 
         // 6. 全语种静态 JSON 压缩包导出端点：GET /api/v1/projects/{project}/export-zip
+        // 导出能拉走全量草稿：与其它写端点走同一把可选密钥门禁（Lingua:Distribution:WriteApiKey）。
         app.MapGet("/api/v1/projects/{project}/export-zip", async (
             string project,
             string? format,
             HttpContext httpContext,
+            IOptions<LinguaDistributionOptions> writeGate,
             StaticBundlePublisher publisher,
             CancellationToken ct) =>
         {
-            bool isFlat = string.Equals(format, "flat", StringComparison.OrdinalIgnoreCase);
-            try
+            if (RejectUnauthorizedWrite(httpContext.Request, writeGate.Value) is { } rejected)
             {
-                var zipBytes = await publisher.ExportProjectZipAsync(project, isFlat, ct);
-                return Results.File(zipBytes, "application/zip", $"{project}-i18n-json.zip");
+                return rejected;
             }
-            catch (InvalidOperationException ex)
-            {
-                return Results.NotFound(new { error = ex.Message });
-            }
+
+            return await ExportZipAsync(project, format, publisher, ct);
         });
+
+        // 6b. 管理后台的导出入口：GET /admin/projects/{project}/export-zip
+        // 管理后台「下载全语种 ZIP」是浏览器的普通导航（<a href>），带不了 X-Lingua-Key 请求头；
+        // 如果它指向上面那个公开端点，一旦配置了 WriteApiKey，管理员反而下载不了。
+        // 这条路由走 SSO 登录（管理后台同一套授权策略，未登录 302 到 /login），与共享密钥是两套互不影响的鉴权：
+        // 机器调用方（脚本 / CLI）带密钥走上面的 /api/v1，人在后台点按钮走这里。
+        app.MapGet("/admin/projects/{project}/export-zip", async (
+            string project,
+            string? format,
+            StaticBundlePublisher publisher,
+            CancellationToken ct) => await ExportZipAsync(project, format, publisher, ct))
+            .RequireAuthorization(AuthRegistration.AdminPolicy);
 
         // 7. 发布事件实时推送 SSE 端点：GET /api/v1/stream?project=auth-web-staging
         // 每 15 秒发一次心跳注释行（": ping"），避免代理掐断空闲连接，也让客户端能及时发现断线并重连。
@@ -447,6 +515,49 @@ public static class LinguaDistributionEndpoints
         return ByteMemoryResult.Create(payload, "application/json; charset=utf-8");
     }
 
+    /// <summary>导出压缩包的公共实现（公开端点与管理后台入口共用，两者只在鉴权上不同）。</summary>
+    private static async Task<IResult> ExportZipAsync(
+        string project,
+        string? format,
+        StaticBundlePublisher publisher,
+        CancellationToken ct)
+    {
+        var isFlat = string.Equals(format, "flat", StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            var zipBytes = await publisher.ExportProjectZipAsync(project, isFlat, ct);
+            return Results.File(zipBytes, "application/zip", $"{project}-i18n-json.zip");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Results.NotFound(new { error = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// 写类端点（创建 / 删除 / 导入 / 导出）的可选共享密钥门禁：配置了 Lingua:Distribution:WriteApiKey 时，
+    /// 必须携带匹配的 X-Lingua-Key（与项目写密钥同一套常量时间校验）；留空 = 匿名放行（内网受控网段部署的默认）。
+    /// 返回 null 表示放行，否则返回应答（缺失 401 / 不匹配 403）。
+    /// 只管 /api/v1 的机器调用；管理后台的导出入口（/admin/...）走 SSO，不经过这里。
+    /// </summary>
+    private static IResult? RejectUnauthorizedWrite(HttpRequest request, LinguaDistributionOptions options)
+    {
+        if (string.IsNullOrWhiteSpace(options.WriteApiKey))
+        {
+            return null;
+        }
+
+        var provided = request.Headers[WriteKeys.HeaderName].FirstOrDefault();
+        if (string.IsNullOrEmpty(provided))
+        {
+            return Results.Unauthorized();
+        }
+
+        return WriteKeys.Matches(options.WriteApiKey, provided)
+            ? null
+            : Results.StatusCode(StatusCodes.Status403Forbidden);
+    }
+
     private static bool IfNoneMatchContains(HttpRequest request, string etag)
     {
         var header = request.Headers.IfNoneMatch.ToString();
@@ -455,7 +566,14 @@ public static class LinguaDistributionEndpoints
             return false;
         }
 
+        // If-None-Match 用弱比较（RFC 9110 §13.1.2）：两边都先去掉 W/ 前缀再逐字比较。
+        // 响应压缩中间件会把强 ETag 改成弱的，所以客户端回传的常常是 W/"…"。
+        // 只能去掉**恰好一个**前缀 "W/"，不能用 TrimStart('W', '/')——后者会吃掉标签开头任意个 W 或 /。
+        var current = StripWeakPrefix(etag);
         return header.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .Any(tag => tag == "*" || string.Equals(tag.TrimStart('W', '/'), etag, StringComparison.Ordinal));
+            .Any(tag => tag == "*" || string.Equals(StripWeakPrefix(tag), current, StringComparison.Ordinal));
     }
+
+    private static string StripWeakPrefix(string tag) =>
+        tag.StartsWith("W/", StringComparison.Ordinal) ? tag[2..] : tag;
 }

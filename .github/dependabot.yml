@@ -6,6 +6,20 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    ignore:
+      # SDK.Maui / SDK.MasaBlazor 的 net8.0 目标有意固定在 Microsoft.Extensions.* 8.0.x（见各自 csproj 的注释），
+      # 避免迫使 .NET 8 客户端应用升级整套 Microsoft.Extensions.*。Dependabot 不区分同一 csproj 内按 TFM 条件的版本，
+      # 不忽略主版本的话每周都会提 PR 把 net8.0 升回 10.x。副作用：这三个包的主版本升级改为手动。
+      #
+      # 只列这三个包，不用 "Microsoft.Extensions.*" 通配：通配会连带屏蔽 Microsoft.Extensions.AI /
+      # Microsoft.Extensions.AI.OpenAI（MASA.Lingua.AI 在用）——它们的主版本独立于 .NET，该照常收到升级 PR。
+      # 新增「net8.0 固定在 8.0.x」的包时，记得在这里补一条。
+      - dependency-name: "Microsoft.Extensions.Http"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.Extensions.Localization.Abstractions"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "Microsoft.Extensions.Hosting.Abstractions"
+        update-types: ["version-update:semver-major"]
 
   # lingua-vue (npm)
   - package-ecosystem: npm

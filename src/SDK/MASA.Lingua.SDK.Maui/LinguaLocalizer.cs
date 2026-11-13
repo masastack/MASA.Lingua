@@ -9,6 +9,9 @@ using MASA.Lingua.SDK.Abstractions;
 using MASA.Lingua.Core.Abstractions;
 using MASA.Lingua.Core.Formatting;
 using MASA.Lingua.Core.Publishing;
+using MASA.Lingua.Core.Serialization;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace MASA.Lingua.SDK.Maui;
 
@@ -22,6 +25,15 @@ namespace MASA.Lingua.SDK.Maui;
 /// 需要更及时（如「回到前台」）由应用自行调用 <see cref="TrySyncAsync"/> / <see cref="SyncAsync"/>。
 /// 它不依赖 MAUI 工作负载，任何 .NET 8 客户端都能用。
 /// </summary>
+/// <remarks>
+/// <para>
+/// 线程契约：<see cref="InitializeAsync"/> / <see cref="SyncAsync"/> / <see cref="TrySyncAsync"/> 内部**刻意不使用**
+/// <c>ConfigureAwait(false)</c>，因此 <see cref="PropertyChanged"/> 与 <see cref="ILinguaChangeNotifier.OnCultureUpdated"/>
+/// 都在**调用它们的上下文**里触发：在 UI 线程（<c>App</c> 构造、<c>OnResume</c>）发起同步，通知就在 UI 线程上，
+/// 绑定刷新与 Blazor Hybrid 的 <c>StateHasChanged</c> 无需再切线程；从后台线程发起则通知也在后台线程上，由应用自行切回 UI 线程。
+/// 不要给这些方法里的 await 补 <c>ConfigureAwait(false)</c>：那会让通知跑到线程池线程（有回归测试守着）。
+/// </para>
+/// </remarks>
 public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
 {
     private const string EtagFileName = "lingua.etags"; // 不用 .json 后缀，避免被当成语种文件加载
@@ -36,11 +48,13 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
     private readonly bool _ownsHttp;
     private readonly ILinguaMemoryStore _store;
     private readonly ILinguaChangeNotifier? _notifier;
+    private readonly ILogger _logger;
     private readonly SemaphoreSlim _syncGate = new(1, 1);
     private readonly Dictionary<string, string> _etags = new(StringComparer.OrdinalIgnoreCase);
     private readonly string _clientId;
     private string? _manifestEtag;
     private string? _version;
+    private volatile Exception? _lastSyncError;
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -48,7 +62,8 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         LinguaClientOptions options,
         HttpClient? http = null,
         ILinguaMemoryStore? store = null,
-        ILinguaChangeNotifier? notifier = null)
+        ILinguaChangeNotifier? notifier = null,
+        ILogger<LinguaLocalizer>? logger = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (string.IsNullOrWhiteSpace(options.ProjectCode))
@@ -57,6 +72,7 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         }
 
         _options = options;
+        _logger = logger ?? NullLogger<LinguaLocalizer>.Instance;
         _ownsHttp = http is null;
         _http = http ?? new HttpClient();
         _notifier = notifier;
@@ -78,6 +94,15 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
 
     /// <summary>当前持有的平台发布版本指纹；还没同步过为 null。</summary>
     public string? Version => _version;
+
+    /// <summary>
+    /// 最近一次同步（<see cref="SyncAsync"/> / <see cref="TrySyncAsync"/> / <see cref="InitializeAsync"/> 里的联网部分）失败的异常；
+    /// 之后一次同步成功（含「没变化」304、项目未发布 404）会清空为 null。调用方主动取消不算失败。
+    /// <see cref="TrySyncAsync"/> 与 <see cref="InitializeAsync"/> 不向外抛异常，线上排查「为什么一直没更新」就看这里
+    /// （例如酒店 Wi-Fi 登录页返回了 HTML、磁盘写满、<see cref="LinguaClientOptions.ServerEndpoint"/> 写错）。
+    /// 失败也会以 Warning 级别写入 <see cref="ILogger{TCategoryName}"/>（应用注册了日志时，经 <c>AddLinguaMaui</c> 自动接入）。
+    /// </summary>
+    public Exception? LastSyncError => _lastSyncError;
 
     /// <summary>
     /// 平台 manifest 下发的语种清单（语言切换器的数据来源）。
@@ -127,9 +152,17 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
     /// </summary>
     public bool Seed(string culture, ReadOnlySpan<byte> utf8Json)
     {
-        if (!IsSafeCultureName(culture))
+        if (!LinguaCultureFiles.IsSafeCultureName(culture))
         {
             return false;
+        }
+
+        // 语种名会变成文件名，先规范化：Android 文件系统区分大小写、iOS（APFS 默认）不区分，
+        // 不规范化的话 Seed("zh-cn") 在 Android 上会写出一个与 manifest 的 zh-CN.json 并存的第二个文件，
+        // 两个平台的缓存内容随之分叉。规范化不了的写法（通过了 IsSafeCultureName 但不符合 ll[-Ssss][-RR] 形状）保持原样，不误拒。
+        if (LinguaCultureFiles.TryResolveCultureFileName(culture, out var normalized))
+        {
+            culture = normalized;
         }
 
         var path = CachePath(culture);
@@ -139,6 +172,13 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         }
 
         var bytes = utf8Json.ToArray();
+        // 顺序：校验 → 原子落盘 → 最后更新内存，任何一步失败都不会留下「半个」状态。
+        // 先校验：内容不是合法 JSON 时这里抛出，不会留下一个永远挡住后续 Seed（File.Exists 为真）的坏缓存文件。
+        // 落盘在内存之前：写盘失败（磁盘满 / 权限 / 被杀软占用）时内存还没动，
+        // 不会出现「本次会话有种子内容、重启后消失」的内存与磁盘分叉。
+        // 反方向（文件已落盘、内存没更新）是安全且自愈的：下次启动 LoadFromLocalDirectory 会把它读回来。
+        // 校验用的字典直接丢弃：store 的接口只收字节，会在内部再解析一次。代价只在「内容真的变了」时才付（启动时读缓存不经过这里）。
+        JsonBundleConverter.FlattenToLookupDictionary(bytes);
         WriteCacheFile(culture, bytes);
         _store.UpdateCultureFromJsonBytes(culture, bytes);
         return true;
@@ -155,7 +195,10 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
     /// <summary>
     /// 启动时调用一次：先读本机缓存（立即可用，离线也行），再联网拉取一次更新——应用每次重启都会经过这里。
     /// 这是客户端唯一的内置拉取时机（没有常驻轮询）；需要更及时的更新（如「回到前台」）由应用自行调用 <see cref="TrySyncAsync"/>。
-    /// 没配置 <see cref="LinguaClientOptions.ServerEndpoint"/>、或网络不可用 / 超时时，不抛异常，继续用缓存。
+    /// 没配置 <see cref="LinguaClientOptions.ServerEndpoint"/>、或联网同步失败（网络不可用 / 超时 / 服务端或响应异常 / 磁盘写不进）时，
+    /// 不抛异常，继续用缓存；失败原因见 <see cref="LastSyncError"/>。
+    /// 不建议在应用启动路径上 <c>await</c> 它：弱网 / 黑洞网络下联网部分可能要等到 HTTP 超时才返回，
+    /// 推荐 <c>_ = lingua.InitializeAsync();</c>（本机缓存的读取在第一个 <c>await</c> 之前同步完成，页面立即有文案）。
     /// </summary>
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -169,12 +212,15 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
             return;
         }
 
+        // 注意：这里（以及本类所有 await）刻意不加 ConfigureAwait(false)，见类注释里的线程契约。
         await TrySyncAsync(ct);
     }
 
     /// <summary>
-    /// 同 <see cref="SyncAsync"/>，但网络不可用 / 超时 / 服务端报错时不抛异常，返回 false，继续使用本机缓存。
-    /// 适合在「回到前台」这类不方便处理异常的地方调用。调用方主动取消（<paramref name="ct"/>）仍会抛出 <see cref="OperationCanceledException"/>。
+    /// 同 <see cref="SyncAsync"/>，但除调用方主动取消（<paramref name="ct"/>，仍会抛出 <see cref="OperationCanceledException"/>）外，
+    /// 任何失败都不抛异常、返回 false、继续使用本机缓存；失败原因记录在 <see cref="LastSyncError"/>。
+    /// 失败包括：网络不可用 / 超时 / 服务端报错、响应不是合法 JSON（例如酒店 Wi-Fi 登录页返回了 HTML）、磁盘写不进、地址配错等。
+    /// 适合在「回到前台」这类不方便处理异常的地方调用。
     /// </summary>
     public async Task<bool> TrySyncAsync(CancellationToken ct = default)
     {
@@ -182,15 +228,16 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         {
             return await SyncAsync(ct);
         }
-        catch (Exception ex) when (ex is HttpRequestException || (ex is TaskCanceledException && !ct.IsCancellationRequested))
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
+            // 异常已由 SyncAsync 记入 LastSyncError，这里只负责不向外抛
             return false;
         }
     }
 
     /// <summary>
     /// 与平台同步一次：manifest 没变（304）或项目还没发布（404）返回 false；有语种更新返回 true。
-    /// 建议在应用回到前台时调用，没变化时开销只是一次 304。并发调用会排队。出错时抛出异常。
+    /// 建议在应用回到前台时调用，没变化时开销只是一次 304。并发调用会排队。出错时抛出异常（同时记入 <see cref="LastSyncError"/>）。
     /// </summary>
     public async Task<bool> SyncAsync(CancellationToken ct = default)
     {
@@ -202,114 +249,138 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         await _syncGate.WaitAsync(ct);
         try
         {
-            var endpoint = _options.ServerEndpoint!.TrimEnd('/');
-            var manifestUrl = LinguaProtocol.Combine(endpoint, LinguaProtocol.ManifestPath(_options.ProjectCode));
-
-            using var req = NewRequest(manifestUrl);
-            // manifest ETag 只能证明线上没变，不能证明本机文件还在（可能被系统清理 / 用户删除）。
-            // 只要「我们持有 ETag 的语种」缺了缓存文件，就不带 If-None-Match 拉全量 manifest，
-            // 让下面的下载条件（!File.Exists）把这些语种补回来 —— 否则 304 会永远跳过补下载。
-            if (!string.IsNullOrEmpty(_manifestEtag) && !HasMissingCacheFile())
+            // 结果记录在闸门之内：并发调用按闸门串行执行，LastSyncError 因此始终对应「最后完成的那一次同步」。
+            // 记在闸门之外的话，先失败的调用可能在后成功的调用之后才写入，把已经恢复的错误又写回来。
+            try
             {
-                req.Headers.TryAddWithoutValidation("If-None-Match", _manifestEtag);
+                var changed = await SyncCoreAsync(ct);
+                _lastSyncError = null;
+                return changed;
             }
-
-            using var res = await _http.SendAsync(req, ct);
-            if (res.StatusCode is HttpStatusCode.NotModified or HttpStatusCode.NotFound)
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
-                return false;
+                _lastSyncError = ex;
+                // TrySyncAsync / InitializeAsync 不向外抛，日志是线上排查「为什么一直没更新」的第二条线索
+                _logger.LogWarning(ex, "Lingua 同步失败（项目 {ProjectCode}），继续使用本机缓存。", _options.ProjectCode);
+                throw;
             }
-
-            res.EnsureSuccessStatusCode();
-            var manifest = await res.Content.ReadFromJsonAsync<ProjectManifest>(ManifestJson, ct)
-                           ?? throw new InvalidOperationException("manifest 响应为空。");
-
-            // manifest 里重复的语种条目只取第一个：两份一样的并行任务会同时写同一个缓存文件
-            var entries = manifest.Cultures
-                .Where(c => IsSafeCultureName(c.Culture))
-                .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-
-            // 并行下载 ETag 变化或缓存缺失的语种（限流 <see cref="MaxParallelDownloads"/>）。
-            // 任一失败会向上抛交由调用方处理；已成功的语种文件与内存都已更新，下次同步会被 ETag 跳过。
-            var changedCount = 0;
-            var pending = entries
-                .Where(c => !_etags.TryGetValue(c.Culture, out var held) || held != c.ETag || !File.Exists(CachePath(c.Culture)))
-                .ToList();
-
-            if (pending.Count > 0)
-            {
-                using var gate = new SemaphoreSlim(MaxParallelDownloads, MaxParallelDownloads);
-                var tasks = pending.Select(async c =>
-                {
-                    await gate.WaitAsync(ct);
-                    try
-                    {
-                        // .NET 客户端优先下载扁平格式：没有键路径冲突的表达缺陷，拍平后的查询 key 与嵌套格式完全一致
-                        using var cultureRes = await _http.SendAsync(
-                            NewRequest(LinguaProtocol.Combine(endpoint, string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl)), ct);
-                        cultureRes.EnsureSuccessStatusCode();
-                        var bytes = await cultureRes.Content.ReadAsByteArrayAsync(ct);
-
-                        WriteCacheFile(c.Culture, bytes);
-                        _store.UpdateCultureFromJsonBytes(c.Culture, bytes);
-                        lock (_etags)
-                        {
-                            _etags[c.Culture] = c.ETag;
-                        }
-                        Interlocked.Increment(ref changedCount);
-                    }
-                    finally
-                    {
-                        gate.Release();
-                    }
-                });
-
-                await Task.WhenAll(tasks);
-            }
-            var changed = changedCount > 0;
-
-            // 默认语种与语种清单在**全部语种下载成功后**才生效：
-            // 中途失败时语言切换器不会列出磁盘上还没有的语种，下次同步成功才会更新
-            var cultures = entries.Select(c => c.Culture).ToList();
-            _store.SetDefaultCulture(manifest.DefaultCulture);
-            _store.SetSupportedCultures(cultures);
-            AvailableCultures = cultures;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableCultures)));
-
-            // 平台已移除的语种顺手清掉过期的 ETag 记录（缓存文件保留给离线兜底）：
-            // 否则该文件一旦丢失，HasMissingCacheFile 会让之后每次同步都退回全量 manifest
-            lock (_etags)
-            {
-                var alive = new HashSet<string>(cultures, StringComparer.OrdinalIgnoreCase);
-                foreach (var stale in _etags.Keys.Where(k => !alive.Contains(k)).ToList())
-                {
-                    _etags.Remove(stale);
-                }
-            }
-
-            // 全部语种都成功后才推进版本与 manifest ETag；中途失败，下次同步会重试
-            var versionChanged = !string.Equals(_version, manifest.Version, StringComparison.Ordinal);
-            _version = manifest.Version;
-            _manifestEtag = res.Headers.ETag?.Tag ?? manifest.ETag;
-            SaveEtags();
-
-            if (changed)
-            {
-                RaiseItemsChanged();
-            }
-
-            if (versionChanged)
-            {
-                await AckVersionAsync(manifestUrl, ct);
-            }
-
-            return changed;
         }
         finally
         {
             _syncGate.Release();
         }
+    }
+
+    /// <summary>同步的实际工作；调用方必须已持有 <see cref="_syncGate"/> 且已确认配置了 ServerEndpoint。</summary>
+    private async Task<bool> SyncCoreAsync(CancellationToken ct)
+    {
+        var endpoint = _options.ServerEndpoint!.TrimEnd('/');
+        var manifestUrl = LinguaProtocol.Combine(endpoint, LinguaProtocol.ManifestPath(_options.ProjectCode));
+
+        using var req = NewRequest(manifestUrl);
+        // manifest ETag 只能证明线上没变，不能证明本机文件还在（可能被系统清理 / 用户删除）。
+        // 只要「我们持有 ETag 的语种」缺了缓存文件，就不带 If-None-Match 拉全量 manifest，
+        // 让下面的下载条件（!File.Exists）把这些语种补回来 —— 否则 304 会永远跳过补下载。
+        if (!string.IsNullOrEmpty(_manifestEtag) && !HasMissingCacheFile())
+        {
+            req.Headers.TryAddWithoutValidation("If-None-Match", _manifestEtag);
+        }
+
+        using var res = await _http.SendAsync(req, ct);
+        if (res.StatusCode is HttpStatusCode.NotModified or HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        res.EnsureSuccessStatusCode();
+        var manifest = await res.Content.ReadFromJsonAsync<ProjectManifest>(ManifestJson, ct)
+                       ?? throw new InvalidOperationException("manifest 响应为空。");
+
+        // manifest 里重复的语种条目只取第一个：两份一样的并行任务会同时写同一个缓存文件
+        var entries = manifest.Cultures
+            .Where(c => LinguaCultureFiles.IsSafeCultureName(c.Culture))
+            .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        // 并行下载 ETag 变化或缓存缺失的语种（限流 <see cref="MaxParallelDownloads"/>）。
+        // 任一失败会向上抛交由调用方处理；已成功的语种文件与内存都已更新，下次同步会被 ETag 跳过。
+        // 每个语种内部「校验 → 原子落盘 → 最后更新内存」：响应内容不是合法 JSON（代理 / 登录页改写等）时
+        // 在磁盘与内存都还没动的阶段就抛出；写盘失败（磁盘满 / 权限）时内存与 ETag 也保持原样，
+        // 不会出现「界面已是新文案、重启后又回到旧缓存」的内存与磁盘分叉。两种情况 ETag 都不推进，下次同步会重试。
+        var changedCount = 0;
+        var pending = entries
+            .Where(c => !_etags.TryGetValue(c.Culture, out var held) || held != c.ETag || !File.Exists(CachePath(c.Culture)))
+            .ToList();
+
+        if (pending.Count > 0)
+        {
+            using var gate = new SemaphoreSlim(MaxParallelDownloads, MaxParallelDownloads);
+            var tasks = pending.Select(async c =>
+            {
+                await gate.WaitAsync(ct);
+                try
+                {
+                    // .NET 客户端优先下载扁平格式：没有键路径冲突的表达缺陷，拍平后的查询 key 与嵌套格式完全一致
+                    using var cultureRes = await _http.SendAsync(
+                        NewRequest(LinguaProtocol.Combine(endpoint, string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl)), ct);
+                    cultureRes.EnsureSuccessStatusCode();
+                    var bytes = await cultureRes.Content.ReadAsByteArrayAsync(ct);
+
+                    JsonBundleConverter.FlattenToLookupDictionary(bytes); // 非法 JSON 在这里抛出，磁盘与内存都不会被改
+                    await WriteCacheFileAsync(c.Culture, bytes, ct);       // 写盘失败在这里抛出，内存与 ETag 仍是旧的
+                    _store.UpdateCultureFromJsonBytes(c.Culture, bytes);
+                    lock (_etags)
+                    {
+                        _etags[c.Culture] = c.ETag;
+                    }
+                    Interlocked.Increment(ref changedCount);
+                }
+                finally
+                {
+                    gate.Release();
+                }
+            });
+
+            await Task.WhenAll(tasks);
+        }
+        var changed = changedCount > 0;
+
+        // 默认语种与语种清单在**全部语种下载成功后**才生效：
+        // 中途失败时语言切换器不会列出磁盘上还没有的语种，下次同步成功才会更新
+        var cultures = entries.Select(c => c.Culture).ToList();
+        _store.SetDefaultCulture(manifest.DefaultCulture);
+        _store.SetSupportedCultures(cultures);
+        AvailableCultures = cultures;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AvailableCultures)));
+
+        // 平台已移除的语种顺手清掉过期的 ETag 记录（缓存文件保留给离线兜底）：
+        // 否则该文件一旦丢失，HasMissingCacheFile 会让之后每次同步都退回全量 manifest
+        lock (_etags)
+        {
+            var alive = new HashSet<string>(cultures, StringComparer.OrdinalIgnoreCase);
+            foreach (var stale in _etags.Keys.Where(k => !alive.Contains(k)).ToList())
+            {
+                _etags.Remove(stale);
+            }
+        }
+
+        // 全部语种都成功后才推进版本与 manifest ETag；中途失败，下次同步会重试
+        var versionChanged = !string.Equals(_version, manifest.Version, StringComparison.Ordinal);
+        _version = manifest.Version;
+        _manifestEtag = res.Headers.ETag?.Tag ?? manifest.ETag;
+        SaveEtags();
+
+        if (changed)
+        {
+            RaiseItemsChanged();
+        }
+
+        if (versionChanged)
+        {
+            await AckVersionAsync(manifestUrl, ct);
+        }
+
+        return changed;
     }
 
     /// <summary>
@@ -373,25 +444,54 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
     {
         Directory.CreateDirectory(CacheDirectory);
         var temp = Path.Combine(CacheDirectory, $"{culture}.{Guid.NewGuid():N}.tmp");
-        File.WriteAllBytes(temp, bytes);
+        // 写入本身也在 try 内：磁盘写满时 WriteAllBytes 会在写到一半抛出，已经落下的半截临时文件同样要清掉
         try
         {
+            File.WriteAllBytes(temp, bytes);
             MoveWithRetry(temp, CachePath(culture)); // 原子替换，进程被杀也不会留下半个文件
         }
         finally
         {
-            // Move 成功时 temp 已不存在；失败时兜底删除，避免缓存目录积累 .tmp 垃圾
+            // Move 成功时 temp 已不存在；任何失败路径都兜底删除，避免缓存目录积累 .tmp 垃圾
             if (File.Exists(temp))
             {
-                try { File.Delete(temp); } catch (IOException) { }
+                try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="WriteCacheFile"/> 的异步版：网络同步路径（<see cref="SyncCoreAsync"/> 的下载循环）专用。
+    /// 重试等待走 <see cref="Task.Delay"/> 而不是 Thread.Sleep——同步是少数可能在 UI 线程上被 await 的入口
+    /// （文档建议 fire-and-forget，但应用常在 App 构造 / 回到前台时直接 await），Thread.Sleep 会卡住 UI 线程。
+    /// 刻意**不**加 ConfigureAwait(false)：与类级线程契约一致，后续通知仍要回到调用方的上下文。
+    /// </summary>
+    private async Task WriteCacheFileAsync(string culture, byte[] bytes, CancellationToken ct)
+    {
+        Directory.CreateDirectory(CacheDirectory);
+        var temp = Path.Combine(CacheDirectory, $"{culture}.{Guid.NewGuid():N}.tmp");
+        // 写入本身也在 try 内：磁盘写满 / 写到一半被取消时，已经落下的半截临时文件同样要清掉。
+        // 否则这正是「磁盘写满」场景下的反向放大——每次回到前台的重试都往缓存目录多留一个半截文件，把磁盘越填越满。
+        try
+        {
+            await File.WriteAllBytesAsync(temp, bytes, ct);
+            await MoveWithRetryAsync(temp, CachePath(culture), ct); // 原子替换，进程被杀也不会留下半个文件
+        }
+        finally
+        {
+            // Move 成功时 temp 已不存在；任何失败路径都兜底删除，避免缓存目录积累 .tmp 垃圾
+            if (File.Exists(temp))
+            {
+                try { File.Delete(temp); } catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
             }
         }
     }
 
     /// <summary>
     /// 覆盖式 Move：Windows / 移动平台上目标文件被杀软扫描、索引器等句柄短暂占用时会抛
-    /// <see cref="UnauthorizedAccessException"/> / <see cref="IOException"/>，重试几次即可，
-    /// 不应让整次同步失败（与 AspNetCore 端 <c>LinguaJsonSyncService.MoveWithRetry</c> 同一套策略）。
+    /// <see cref="UnauthorizedAccessException"/> / <see cref="IOException"/>，重试几次即可，不应让整次同步失败。
+    /// 同步版只服务 <see cref="Seed"/>（应用启动路径由应用代码直接调用，且目标文件此前不存在、重试极罕见）；
+    /// 网络同步路径一律走 <see cref="MoveWithRetryAsync"/>——Thread.Sleep 在 UI 线程上会卡界面。
     /// </summary>
     private static void MoveWithRetry(string source, string destination)
     {
@@ -406,6 +506,24 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && attempt < maxAttempts)
             {
                 Thread.Sleep(TimeSpan.FromMilliseconds(20 * attempt));
+            }
+        }
+    }
+
+    /// <summary><see cref="MoveWithRetry"/> 的异步版：重试等待不占用调用线程（UI 线程 / 线程池）。</summary>
+    private static async Task MoveWithRetryAsync(string source, string destination, CancellationToken ct)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                File.Move(source, destination, overwrite: true);
+                return;
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), ct);
             }
         }
     }
@@ -463,10 +581,4 @@ public sealed class LinguaLocalizer : INotifyPropertyChanged, IDisposable
         var invalid = Path.GetInvalidFileNameChars();
         return new string(value.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray());
     }
-
-    /// <summary>语种名会变成文件名：只接受普通的语种代码，拒绝路径分隔符等。</summary>
-    private static bool IsSafeCultureName(string culture) =>
-        !string.IsNullOrWhiteSpace(culture) &&
-        culture.Length <= 35 &&
-        culture.All(ch => char.IsLetterOrDigit(ch) || ch is '-' or '_');
 }

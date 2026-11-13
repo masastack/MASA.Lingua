@@ -321,7 +321,7 @@ public partial class Glossary
         var evaluations = new List<(string Origin, string DefaultCulture, List<TranslationEntry> Entries, IReadOnlyList<GlossaryTerm> Terms)>();
         if (ScopeProject is { } project)
         {
-            var shared = _sharedNamespaces.Where(s => project.SharedNamespaceCodes.Contains(s.Code));
+            var shared = _sharedNamespaces.Where(s => project.SharedNamespaceCodes.Contains(s.Code, LinguaKeys.Comparer));
             evaluations.Add((project.Code, project.DefaultCulture, shared.Concat(project.Namespaces).SelectMany(n => n.Entries).ToList(), EffectiveTerms(_terms, globals)));
         }
         else

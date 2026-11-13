@@ -22,7 +22,7 @@ public static class TranslationLayerBuilder
         PublishContentMode? contentMode = null)
     {
         var shared = sharedNamespaces
-            .Where(n => project.SharedNamespaceCodes.Contains(n.Code))
+            .Where(n => project.SharedNamespaceCodes.Contains(n.Code, LinguaKeys.Comparer))
             .ToList();
 
         var fallbackChain = BundleCompiler.BuildFallbackChain(targetCulture, project.DefaultCulture);

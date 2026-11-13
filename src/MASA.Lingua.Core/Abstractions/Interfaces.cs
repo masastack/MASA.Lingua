@@ -24,7 +24,26 @@ public sealed record JsonImportResult(
     IReadOnlyList<string> AffectedNamespaces,
     /// <summary>存在规则/术语校验问题的条数。导入一律按「已审核」入库，问题仅统计提示，发布门禁会把关。</summary>
     int FlaggedIssues = 0,
-    int StaleMarked = 0);
+    int StaleMarked = 0)
+{
+    /// <summary>
+    /// 本次导入的词条里涉及的键路径冲突（人话描述，最多列出若干处）：根裸 key 与同名命名空间、点分 key 与「命名空间 + key」撞同一路径等。
+    /// 导入照常入库（冲突是否放行由发布门禁决定），这里只是让维护者在导入当下就知情，而不是等到发布被拦才发现。
+    /// </summary>
+    public IReadOnlyList<string> PathConflicts { get; init; } = [];
+
+    /// <summary>冲突总处数（<see cref="PathConflicts"/> 可能因展示上限被截断）。</summary>
+    public int PathConflictCount { get; init; }
+
+    /// <summary>
+    /// 导入文件内「仅大小写不同」的重复词条（人话描述，最多列出若干处）：命名空间与 Key 忽略大小写，这几项是同一个词条，
+    /// 导入时后出现的覆盖先出现的（库里保留首次创建时的写法）。通常是文件里写法不一致，让维护者知情后统一。
+    /// </summary>
+    public IReadOnlyList<string> CaseDuplicates { get; init; } = [];
+
+    /// <summary>仅大小写不同的重复词条总处数（<see cref="CaseDuplicates"/> 可能因展示上限被截断）。</summary>
+    public int CaseDuplicateCount { get; init; }
+}
 
 public sealed record AiTranslationRequestItem(
     Guid EntryId,

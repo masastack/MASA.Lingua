@@ -35,12 +35,15 @@ public sealed class EntryWriteLoadingTests
         return Encoding.UTF8.GetBytes(JsonSerializer.Serialize(map));
     }
 
-    /// <summary>所有查词条表的语句都带 Key 条件（单个 Key 或 ANY 数组）：没有「读整个命名空间」的查询。</summary>
+    /// <summary>
+    /// 所有查词条表的语句都带 Key 条件（单个 Key 或 ANY 数组）：没有「读整个命名空间」的查询。
+    /// Key 忽略大小写，条件落在 <c>lower(key)</c> 上（命中表达式唯一索引），所以匹配 <c>key = </c> 或 <c>lower(...key) = </c>。
+    /// </summary>
     private static void AssertEntryReadsAreKeyFiltered(IReadOnlyList<string> commands)
     {
         var entryReads = commands.Where(c => c.Contains("FROM translation_entries", StringComparison.Ordinal)).ToList();
         Assert.NotEmpty(entryReads); // 防止没读词条表时空过
-        Assert.All(entryReads, sql => Assert.Matches(new Regex(@"\bkey = "), sql));
+        Assert.All(entryReads, sql => Assert.Matches(new Regex(@"\blower\([\w\.""]*\bkey\) = "), sql));
     }
 
     [Fact]

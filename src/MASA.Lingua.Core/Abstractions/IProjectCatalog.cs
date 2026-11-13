@@ -18,6 +18,7 @@ public sealed record ProjectOverview(
 /// 项目命名空间的轻量投影：只带编码与「覆盖了共享词条」的词条 Key 集合，不含源文案与译文。
 /// 供共享词条「影响面」统计（哪些项目继承、哪些已覆盖）这类只看 Key 是否存在的计算使用。
 /// Key 集合用哈希集合承载：影响面统计对每个共享词条都要做一次成员判断，线性查找会随词条数平方放大。
+/// 集合必须用 <see cref="Domain.LinguaKeys.Comparer"/>（忽略大小写）构建，成员判断才与词条「Key 忽略大小写」的口径一致。
 /// </summary>
 public sealed record ImpactNamespace(string Code, bool IsShared, IReadOnlySet<string> EntryKeys);
 
@@ -26,6 +27,13 @@ public sealed record ProjectImpact(string Code, IReadOnlyList<string> SharedName
 
 /// <summary>缺词上报鉴权所需的最小项目信息（不含词条树）。</summary>
 public sealed record ProjectWriteAccess(string Code, string DefaultCulture, string? WriteKey);
+
+/// <summary>
+/// 「按需创建」的结果：<see cref="Created"/> 为 true 才表示**本次调用**真正插入了这一行；
+/// 项目早已存在、或并发创建时输给了另一个调用方，都是 false（此时 <see cref="Project"/> 是已有项目，不是本调用方创建的）。
+/// 只有真正创建者才应该拿到生成的写密钥。
+/// </summary>
+public sealed record ProjectCreationResult(Project Project, bool Created);
 
 /// <summary>
 /// 发布 / 导出的数据源：项目词条树 + 项目引用的共享命名空间，来自同一次读库（同一时间点的一致视图）。
@@ -117,9 +125,22 @@ public interface IProjectCatalog
     /// 该方法只为「PM 有此应用、本地还没有多语言配置」的场景补一份可编辑的配置骨架。
     /// 该编码已存在时原样返回现有项目，不重复创建。
     /// </para>
+    /// <para>
+    /// 编码会用作发布产物目录名，必须是安全文件名片段（LinguaProjectCodes 校验：字母 / 数字 / 连字符 / 下划线，1–64 字符），
+    /// 不合法时抛 LinguaValidationException。
+    /// </para>
     /// <para>创建时同步生成项目写密钥（缺词上报鉴权，见 <see cref="RegenerateWriteKeyAsync"/>）。</para>
     /// </summary>
     Task<Project> CreateProjectAsync(string projectCode, CancellationToken ct = default);
+
+    /// <summary>
+    /// <see cref="CreateProjectAsync"/> 的带结果版：同样幂等、同样的编码校验与骨架默认值，
+    /// 但额外告诉调用方「这一行是不是本次调用创建的」（<see cref="ProjectCreationResult.Created"/>）。
+    /// 两个调用方并发创建同一编码时，唯一索引只放行一个：赢的一方 Created = true，输的一方回读已有项目并返回 Created = false。
+    /// 需要区分「新建」与「已存在」的入口（例如只向创建者返回写密钥的 HTTP 端点）必须用这个方法，
+    /// 不能靠「返回了项目」推断自己创建了它。
+    /// </summary>
+    Task<ProjectCreationResult> CreateProjectIfAbsentAsync(string projectCode, CancellationToken ct = default);
 
     /// <summary>
     /// 重置项目写密钥（缺词上报鉴权，<c>X-Lingua-Key</c> 头）：生成新密钥并返回明文（旧密钥立即失效）。

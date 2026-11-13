@@ -5,6 +5,8 @@
 @inject ILinguaRepository Repository
 @inject WorkspaceScope Scope
 @inject IPmProjectDirectory PmDirectory
+@inject ToastService Toasts
+@inject Microsoft.Extensions.Logging.ILogger<MainLayout> Logger
 @inject Microsoft.Extensions.Options.IOptions<MASA.Lingua.AI.LinguaAiOptions> AiOptions
 
 @* 外壳 = Masa.Blazor 标准后台布局：侧栏（品牌 + 导航）+ 48px 顶栏（项目/应用切换 + AI 状态 + 用户）+ 主内容区。
@@ -331,6 +333,18 @@
             await RefreshLocalStateAsync();
             // 通知词条矩阵 / 术语库 / 导入发布按新配置重载
             Scope.NotifyChanged();
+        }
+        catch (LinguaValidationException ex)
+        {
+            // 项目编码取自 PM 的应用 Identity，不在可控范围内：含点号、超过 64 字符或非 ASCII 的 Identity 会在这里被校验拒绝。
+            // 事件处理器里未处理的异常会让整条 Blazor 电路终止，必须接住并把原因告诉用户（改 PM 里的 Identity 后再创建）。
+            Toasts.Error(ex.Message);
+        }
+        catch (Exception ex)
+        {
+            // 数据库不可用等：同样不能让点击事件把电路带崩，横幅与按钮保持原状，用户可以重试
+            Logger.LogError(ex, "为应用 {ProjectCode} 创建多语言配置失败。", Scope.ProjectCode);
+            Toasts.Error($"创建多语言配置失败：{ex.Message}");
         }
         finally
         {

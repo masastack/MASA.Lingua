@@ -9,7 +9,8 @@
 ## 前置条件
 
 - Lingua 里已有这个项目并**发布过**；知道项目编码（例如内置示例 `auth-web-staging`）和服务地址。
-- 读发布产物、导入、导出都不需要密钥；密钥只用于缺词上报（项目写密钥 `X-Lingua-Key`，仅服务端 SDK 支持，见下文「限制」）。
+- 读发布产物不需要密钥（本 SDK 只做读取与缺词上报）；密钥只用于缺词上报（项目写密钥 `X-Lingua-Key`，仅服务端 SDK 支持，见下文「限制」）。
+  脚本化的创建 / 导入 / 导出默认匿名，服务端配置了共享写密钥 `Lingua:Distribution:WriteApiKey` 时才要求带密钥，见 [README 的访问策略](README.md)。
 
 ## 1. 引用
 
@@ -116,6 +117,10 @@ public class OrderController(IStringLocalizer<OrderController> L) : Controller {
 1. **启动**：先加载 `LocalJsonDirectory` 里已有的 `{culture}.json`（服务端不可达也能起来），并监听该目录的文件变化。
 2. **同步**：请求 manifest（带 `If-None-Match`，没变是 304）→ 版本变了就只拉 ETag 变化的语种 → 原子写盘 + 替换内存字典。
    **平台已发布的全部语种都会同步**，默认语种取 manifest 的 `defaultCulture`，作为词条缺失时的回退。
+   - **本地文件被删会自动补回**：只要某个语种的 `{culture}.json` 丢了（被清理 / 误删），下一次对账就不带 `If-None-Match`、
+     重新拉全量并补盘，不会被 304 永远拦住。平台已移除的语种不参与这个判断（本地文件保留作离线兜底）。
+   - **语种名必须是安全文件名**：manifest / SSE 事件里的语种名会拼进本地路径，只接受字母 / 数字 / `-` / `_`（≤ 35 字符）；
+     含 `/`、`\`、`..` 等的条目会被跳过并记一条 Warning，不会把文件写到 `LocalJsonDirectory` 之外。
 3. **一个同步循环**：SSE 事件与「队列空闲超时」都投递到同一个队列，串行执行、自动合并。
    - SSE 事件带版本指纹与各语种 ETag：客户端据此直接拉变化的语种，**省掉一次 manifest 往返**（实时路径）。
    - 队列静默满一个周期就主动对账一次（兜底路径）。SSE 连着时周期是 5 分钟；断开或未启用时回到

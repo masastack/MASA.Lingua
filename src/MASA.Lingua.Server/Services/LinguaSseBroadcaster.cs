@@ -44,6 +44,12 @@ public sealed class LinguaSseBroadcaster
     public bool TryGetLast(string projectCode, out BundlePublishedEvent evt) =>
         _lastByProject.TryGetValue(projectCode, out evt!);
 
+    /// <summary>
+    /// 忘掉该项目最近一次发布事件（项目被删除时调用）：
+    /// 否则同名项目重建后，带旧 <c>Last-Event-ID</c> 重连的客户端会被补发一条指向已不存在产物的陈旧事件。
+    /// </summary>
+    public void Forget(string projectCode) => _lastByProject.TryRemove(projectCode, out _);
+
     public void Broadcast(BundlePublishedEvent evt)
     {
         // 事件 id 必须严格单调：发布时间的 ticks 在极端情况下可能相同（同一 100ns 内两次发布），

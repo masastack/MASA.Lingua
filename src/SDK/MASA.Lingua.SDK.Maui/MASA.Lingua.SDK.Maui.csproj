@@ -5,10 +5,14 @@
     <Description>MASA.Lingua client for .NET MAUI (and any other .NET 8/10 client app): local cache, manifest/ETag sync, bindable indexer and IStringLocalizer. Has no dependency on the MAUI workload.</Description>
   </PropertyGroup>
 
-  <!-- 条件引用只改版本、不改包名集合 -->
+  <!--
+    条件引用只改版本、不改包名集合。
+    net8.0 固定在 8.0.x：.NET 8 的 MAUI / 客户端应用引用本包时，不会被迫把整套 Microsoft.Extensions.* 升到 10.x。
+    （两处版本的主版本升级一律手动，dependabot 已配置忽略下面这两个包的主版本升级，见 .github/dependabot.yml。）
+  -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.14" />
-    <PackageReference Include="Microsoft.Extensions.Localization.Abstractions" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Localization.Abstractions" Version="8.0.34" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.14" />

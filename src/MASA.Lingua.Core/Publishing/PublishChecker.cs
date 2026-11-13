@@ -17,6 +17,9 @@ public sealed record PublishCheckReport(
 {
     public bool CanPublish => Blockers.Count == 0;
 
+    /// <summary>非阻断提示（不影响 <see cref="CanPublish"/>）：已按策略放行的键路径冲突（含仅大小写不同的重复路径）等，供发布页展示。</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
     /// <summary>一句话摘要，写入发布快照用于审计。</summary>
     public string Summary => CanPublish
         ? $"通过检查（{EntryCount} 条词条，{ExcludedTranslations} 条译文因状态未达标不进发布文件）"
@@ -59,17 +62,18 @@ public static class PublishChecker
         var coverage = CoverageCalculator.Compute(entries, project.SupportedCultures, project.DefaultCulture);
 
         var blockers = new List<PublishBlocker>();
+        var warnings = new List<string>();
         var issues = new List<ValidationIssue>();
         var excluded = 0;
 
         // 键路径冲突是结构性的（与语种无关）：同一路径既是词条值又是命名空间对象时，嵌套发布 JSON
         // 只能保留一侧（扁平文件两侧都保留）。默认阻断；消费端用扁平格式的项目可按策略关闭本检查。
+        var pathConflicts = DetectPathConflicts(namespaces);
         if (policy.BlockOnKeyPathConflicts)
         {
-            var pathConflicts = DetectPathConflicts(namespaces);
             foreach (var conflict in pathConflicts.Take(PathConflictReportLimit))
             {
-                blockers.Add(new PublishBlocker(PathConflictCode, Describe(conflict)));
+                blockers.Add(new PublishBlocker(PathConflictCode, DescribeConflict(conflict)));
             }
 
             if (pathConflicts.Count > PathConflictReportLimit)
@@ -77,6 +81,12 @@ public static class PublishChecker
                 blockers.Add(new PublishBlocker(PathConflictCode,
                     $"另有 {pathConflicts.Count - PathConflictReportLimit} 处键路径冲突，发布文件同样会丢失其中一侧的内容"));
             }
+        }
+        else if (pathConflicts.Count > 0)
+        {
+            // 策略放行不等于没有冲突：嵌套 JSON 消费方（Vue 等）仍会丢一侧，只有按扁平格式取词的客户端两侧都正常，
+            // 在发布页留一条提示，避免关掉阻断后冲突彻底「隐形」。
+            warnings.Add($"存在 {pathConflicts.Count} 处键路径冲突（已按发布策略放行）：嵌套 JSON 只保留一侧，仅按扁平格式（?format=flat）取词的客户端两侧都能取到。首处：{DescribeConflict(pathConflicts[0])}");
         }
 
         foreach (var culture in project.SupportedCultures)
@@ -146,7 +156,10 @@ public static class PublishChecker
             coverage,
             issues,
             blockers,
-            excluded);
+            excluded)
+        {
+            Warnings = warnings
+        };
     }
 
     /// <summary>
@@ -154,9 +167,14 @@ public static class PublishChecker
     /// 与发布图层合并语义一致，覆盖不会被误报为冲突。
     /// </summary>
     private static IReadOnlyList<JsonBundleConverter.KeyPathConflict> DetectPathConflicts(
+        IEnumerable<TranslationNamespace> namespaces) =>
+        JsonBundleConverter.DetectPathConflicts(CollectMergedEntries(namespaces));
+
+    private static HashSet<(string Namespace, string Key)> CollectMergedEntries(
         IEnumerable<TranslationNamespace> namespaces)
     {
-        var merged = new HashSet<(string Namespace, string Key)>();
+        // 命名空间 / Key 忽略大小写：共享层与项目层大小写写法不同的同一词条也是「被覆盖」，不是重复
+        var merged = new HashSet<(string Namespace, string Key)>(LinguaKeys.EntryComparer);
         foreach (var ns in namespaces)
         {
             foreach (var entry in ns.Entries)
@@ -165,10 +183,13 @@ public static class PublishChecker
             }
         }
 
-        return JsonBundleConverter.DetectPathConflicts(merged);
+        return merged;
     }
 
-    private static string Describe(JsonBundleConverter.KeyPathConflict conflict)
+    /// <summary>
+    /// 把一处键路径冲突描述成给人看的一句话（发布门禁、导入结果、遥测上报、词条新增提示共用同一份文案）。
+    /// </summary>
+    public static string DescribeConflict(JsonBundleConverter.KeyPathConflict conflict)
     {
         var values = DescribeClaims(conflict.ValueClaims);
 

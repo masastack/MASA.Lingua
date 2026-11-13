@@ -74,7 +74,9 @@ public static class MasaStackStartup
         // PM 清单是平台级数据，统一用应用身份（client_credentials，按 ExpiresIn 缓存），不依赖当前请求/用户：
         // SDK 默认的「透传入站 Authorization」在 Blazor 里没有可透传的头，而 SDK 自带的 ClientTokenGenerater
         // 在有 HttpContext 时会走透传分支，同样不可靠。
-        builder.Services.TryAddScoped<ITokenGenerater>(sp => new PmClientTokenGenerater(
+        // 注册为单例：「未命中单飞」闸门必须跨作用域才有效（SDK 的 TokenProvider 工厂是 scoped，
+        // 每个 PM 调用都会新建 scope 解析它）；生成器自身没有任何 scoped 依赖。
+        builder.Services.TryAddSingleton<ITokenGenerater>(sp => new PmClientTokenGenerater(
             sp.GetRequiredService<IHttpClientFactory>(),
             sp.GetRequiredService<IMemoryCache>(),
             sp.GetRequiredService<ILogger<PmClientTokenGenerater>>(),

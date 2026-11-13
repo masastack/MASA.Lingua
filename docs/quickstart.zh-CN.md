@@ -34,6 +34,8 @@ curl -X POST http://localhost:62641/api/v1/projects/demo
 # {"project":"demo","defaultCulture":"zh-CN","created":true,"writeKey":"..."}
 ```
 
+- 如果服务端配置了 `Lingua:Distribution:WriteApiKey`，建项目、导入、删除都要加请求头 `-H "X-Lingua-Key: <该密钥>"`（没带 `401`、不匹配 `403`）。它是部署级的共享密钥，不是下面每个项目各自的 `writeKey`。
+- 项目编码只允许 ASCII 字母、数字、`-`、`_`（1–64 位），其余一律 `400`。
 - 幂等：项目已存在时返回 `200` 且 `created: false`，不改动任何配置。
 - `writeKey`（仅新建时返回）用于缺词上报鉴权；打算用服务端 SDK 上报就先存下来。
 - 默认语种：默认 `zh-CN`，支持 `zh-CN` / `en-US` / `ja-JP`。语种在导入时按需自动补齐。

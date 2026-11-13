@@ -201,7 +201,7 @@ public static class MasaI18nBridgeExtensions
             try
             {
                 var entries = JsonBundleConverter.FlattenToLookupDictionary(File.ReadAllBytes(path))
-                    .ToFrozenDictionary(StringComparer.Ordinal);
+                    .ToFrozenDictionary(StringComparer.OrdinalIgnoreCase);
                 if (entries.Count > 0)
                 {
                     snapshot[culture] = entries;

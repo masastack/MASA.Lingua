@@ -90,9 +90,10 @@ public sealed class PmProjectDirectory(
             try
             {
                 // 整体卸到线程池 + 单一超时上界（覆盖 token + PM 请求全程）：
-                // Caller 构造会同步解析 TokenProvider → ITokenGenerater.Generater() 同步阻塞换 token（见 Masa
-                // Stack SDK 的 TokenProvider scoped 工厂），这段发生在任何 await 之前——不卸线程的话，
-                // Blazor 电路里它直接冻结渲染器 Dispatcher，且 await 侧的超时（WaitAsync）根本没开始计时、管不到它，
+                // Caller 构造会同步解析 TokenProvider → ITokenGenerater.Generater()（见 Masa
+                // Stack SDK 的 TokenProvider scoped 工厂），这段发生在任何 await 之前——token 命中缓存时它是
+                // 纯同步返回（PmClientTokenGenerater 的快路径），但冷启动 / 到期换取时会同步阻塞（单飞 + 3s 超时上界），
+                // 不卸线程的话 Blazor 电路里它直接冻结渲染器 Dispatcher，且 await 侧的超时（WaitAsync）根本没开始计时、管不到它，
                 // 页面表现为永远「正在加载项目清单…」。卸到线程池后 Dispatcher 不再被阻塞，上界才能真正兜底。
                 var projects = await Task.Run(() => FetchCoreAsync(context), ct)
                     .WaitAsync(requestTimeout, ct);

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using MASA.Lingua.Core.Localization;
 
 namespace MASA.Lingua.SDK.Abstractions;
@@ -105,6 +106,19 @@ public interface ILinguaChangeNotifier
 /// </summary>
 public static class LinguaCultureFiles
 {
+    /// <summary>语种名作为文件名时的长度上限。</summary>
+    public const int MaxCultureNameLength = 35;
+
+    /// <summary>
+    /// 语种名是否能安全地当作文件名使用：只接受 ASCII 字母 / 数字 / <c>-</c> / <c>_</c>，长度 ≤ <see cref="MaxCultureNameLength"/>。
+    /// 语种名来自远端（manifest / SSE 事件 / 调用方），会直接拼进本地缓存路径，必须拒绝路径分隔符、<c>..</c> 与空白。
+    /// 这只是「能不能当文件名」的安全闸，不判断是不是合法 BCP47（那是 <see cref="TryResolveCultureFileName"/> 的事）。
+    /// </summary>
+    public static bool IsSafeCultureName([NotNullWhen(true)] string? culture) =>
+        !string.IsNullOrEmpty(culture)
+        && culture.Length <= MaxCultureNameLength
+        && culture.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_');
+
     /// <summary>
     /// 尝试把资源文件名（不含扩展名）解析为语种名：合法 BCP47 形状返回 true，
     /// 并给出规范化后的语种名（zh_CN / ZH-CN 等不规范写法会被归一为 zh-CN）。

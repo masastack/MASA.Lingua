@@ -34,8 +34,9 @@ public sealed class LinguaI18nResourceContributor : II18nResourceContributor
 
     public string? GetOrNull(string name)
     {
-        // store 内部已做 ':' 与 '.' 分隔符归一，以及 common 命名空间短 Key 兜底，
-        // MASA 现有的扁平 Key（如 "RoleNotExist"）可以直接命中。
+        // store 内部为每条词条存了 '.' / ':' / 混合三种分隔符别名（匹配忽略大小写，与服务端口径一致），
+        // MASA 现有的扁平 Key（如 "RoleNotExist"，即发布产物里的项目根裸 key）与「命名空间.Key」写法都能直接命中；
+        // 没有按短 Key 到 common 等命名空间的兜底查找 —— 取共享词条请写完整的「common.Key」。
         if (_store.TryGetValue(CultureName, name, out var value))
         {
             return value;
