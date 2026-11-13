@@ -11,7 +11,7 @@
     （两处版本的主版本升级一律手动，dependabot 已配置忽略下面这两个包的主版本升级，见 .github/dependabot.yml。）
   -->
   <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.15" />
     <PackageReference Include="Microsoft.Extensions.Localization.Abstractions" Version="8.0.34" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
