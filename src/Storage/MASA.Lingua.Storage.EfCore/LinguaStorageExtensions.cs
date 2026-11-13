@@ -3,6 +3,7 @@ using MASA.Lingua.Core.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace MASA.Lingua.Storage.EfCore;
 
@@ -82,7 +83,45 @@ public static class LinguaStorageExtensions
     public const string PostgreSqlMigrationsAssembly = "MASA.Lingua.Storage.Migrations.PostgreSql";
 
     /// <summary>
-    /// 应用 EF Core 迁移并（空库时）填充内置数据：全局共享命名空间、演示术语库、
+    /// 应用 EF Core 迁移（站点<b>每次启动</b>都会调用，写法参照 MASA.Auth 的 <c>MigrateDbContextAsync</c>）：
+    /// 先看有没有待执行的迁移，有才执行，并把执行了哪些迁移写进日志；已是最新就什么都不做。
+    /// <para>
+    /// 迁移失败（连不上库、迁移脚本报错，例如 <c>CaseInsensitiveKeyUniqueness</c> 发现库里有仅大小写不同的重复项）会记 Critical 日志并
+    /// <b>原样抛出</b>：站点启动失败，而不是带着旧表结构继续跑。库不存在时由 <c>MigrateAsync</c> 负责创建。
+    /// 多副本同时启动是安全的：EF Core 迁移自带数据库级咨询锁，同一时刻只有一个副本在执行，其余副本等锁并发现已是最新。
+    /// </para>
+    /// </summary>
+    public static async Task MigrateLinguaDatabaseAsync(this IServiceProvider services, CancellationToken ct = default)
+    {
+        var factory = services.GetRequiredService<IDbContextFactory<LinguaDbContext>>();
+        var logger = services.GetService<ILoggerFactory>()?.CreateLogger("MASA.Lingua.Storage.Migration");
+
+        try
+        {
+            await using var db = await factory.CreateDbContextAsync(ct);
+            var pending = (await db.Database.GetPendingMigrationsAsync(ct)).ToList();
+            if (pending.Count == 0)
+            {
+                logger?.LogInformation("数据库迁移：已是最新，没有待执行的迁移。");
+                return;
+            }
+
+            logger?.LogInformation(
+                "数据库迁移：有 {Count} 个待执行的迁移（{Migrations}），开始执行。",
+                pending.Count,
+                string.Join(", ", pending));
+            await db.Database.MigrateAsync(ct);
+            logger?.LogInformation("数据库迁移：执行完成。");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogCritical(ex, "数据库迁移失败，站点不会继续启动（不会在旧表结构上运行）。请按错误信息处理后重新启动。");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// 应用 EF Core 迁移（<see cref="MigrateLinguaDatabaseAsync"/>）并（空库时）填充内置数据：全局共享命名空间、演示术语库、
     /// 演示项目 shop-vue，以及两个真实业务示例项目（MASA.Auth 的 auth-web-staging / auth-sso-staging）。
     /// <para>
     /// <b>只对空库生效</b>：一旦库里有任意项目就直接返回。因此修改种子内容（例如把 auth-* 两个项目的词条
@@ -93,9 +132,10 @@ public static class LinguaStorageExtensions
     /// </summary>
     public static async Task InitializeLinguaDatabaseAsync(this IServiceProvider services, CancellationToken ct = default)
     {
+        await services.MigrateLinguaDatabaseAsync(ct);
+
         var factory = services.GetRequiredService<IDbContextFactory<LinguaDbContext>>();
         await using var db = await factory.CreateDbContextAsync(ct);
-        await db.Database.MigrateAsync(ct);
 
         if (await db.Projects.AnyAsync(ct))
         {

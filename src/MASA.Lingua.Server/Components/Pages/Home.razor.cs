@@ -102,7 +102,7 @@ public partial class Home
     // _isLoading（加载骨架标记）来自 LinguaPageBase。
 
     /// <summary>共享词条影响面的记忆化缓存：(命名空间, Key) → 影响面；随数据重载清空。</summary>
-    private readonly Dictionary<(string Namespace, string Key), SharedEntryImpact?> _impactCache = [];
+    private readonly Dictionary<(string Namespace, string Key), SharedEntryImpact?> _impactCache = new(LinguaKeys.EntryComparer);
 
     private string _newNs = "";
     private string _newKey = "";
@@ -234,7 +234,7 @@ public partial class Home
         var list = new List<TranslationNamespace>();
         if (CurrentProject is not null)
         {
-            list.AddRange(_sharedNamespaces.Where(s => CurrentProject.SharedNamespaceCodes.Contains(s.Code)));
+            list.AddRange(_sharedNamespaces.Where(s => CurrentProject.SharedNamespaceCodes.Contains(s.Code, LinguaKeys.Comparer)));
             list.AddRange(CurrentProject.Namespaces);
         }
 
@@ -1109,6 +1109,24 @@ public partial class Home
         var savedNamespace = _newNs?.Trim() ?? "";
         var savedKey = _newKey.Trim();
 
+        // 键路径冲突预检：根裸 key 与同名命名空间、点分 key 与「命名空间 + key」会撞同一个发布 JSON 位置，
+        // 嵌套发布文件里只能留下一侧。项目发布策略默认阻断这类冲突（共享命名空间会影响所有继承它的项目，一律不放行），
+        // 此时直接在新增入口拦下并说明原因，而不是让维护者保存成功后才在发布门禁处撞墙。
+        // 已存在的同一词条（更新）不算冲突；策略放行的项目只做提示。
+        string? conflictNote = null;
+        var pathConflicts = await Repository.FindKeyPathConflictsAsync(SelectedProjectCode, savedNamespace, savedKey);
+        if (pathConflicts.Count > 0)
+        {
+            var blocked = IsSharedScope || (CurrentProject?.PublishPolicy?.BlockOnKeyPathConflicts ?? true);
+            if (blocked)
+            {
+                ShowStatusError($"未保存：{pathConflicts[0]}。请换一个 Key，或把它放进命名空间里（例如「命名空间/Key」）。");
+                return;
+            }
+
+            conflictNote = $"注意：{pathConflicts[0]}（当前发布策略已放行，仅按扁平格式取词的客户端两侧都能取到）。";
+        }
+
         var saved = await Repository.UpsertEntryAsync(
             SelectedProjectCode,
             savedNamespace, // 留空 = 项目根
@@ -1117,6 +1135,14 @@ public partial class Home
             _newContext,
             _newMaxLength,
             new Dictionary<string, string> { [CurrentProject?.DefaultCulture ?? LinguaCultures.DefaultSourceCulture] = _newSourceText.Trim() });
+
+        // 命名空间 / Key 忽略大小写：写法不同的同一词条走「更新」，库里保留首次创建时的写法。提示一句，免得维护者以为建了两条
+        if (!string.Equals(saved.Key, savedKey, StringComparison.Ordinal)
+            || !string.Equals(saved.NamespaceCode ?? "", savedNamespace, StringComparison.Ordinal))
+        {
+            var existingPath = string.IsNullOrEmpty(saved.NamespaceCode) ? saved.Key : $"{saved.NamespaceCode}.{saved.Key}";
+            conflictNote = $"已存在大小写不同的词条「{existingPath}」（命名空间与 Key 不区分大小写），已更新该词条而不是新建。" + conflictNote;
+        }
 
         _newKey = "";
         _newSourceText = "";
@@ -1129,10 +1155,9 @@ public partial class Home
 
         // 跳到新词条所在页；词条按「命名空间 + Key」排序，按索引换算页码
         var index = _filteredEntries.FindIndex(e =>
-            (string.IsNullOrEmpty(savedNamespace) ? string.IsNullOrEmpty(e.NamespaceCode) : e.NamespaceCode == savedNamespace) &&
-            string.Equals(e.Key, savedKey, StringComparison.Ordinal));
+            LinguaKeys.EntryComparer.Equals((e.NamespaceCode, e.Key), (savedNamespace, savedKey)));
         _pageIndex = index >= 0 ? index / _pageSize : 0;
-        _statusMessage = "词条已保存，可点击「AI 批量补全」自动生成其他语种翻译。";
+        _statusMessage = "词条已保存，可点击「AI 批量补全」自动生成其他语种翻译。" + (conflictNote is null ? "" : conflictNote);
     }
 
     private async Task OnRunCheckClickedAsync()

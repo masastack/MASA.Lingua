@@ -48,6 +48,9 @@ export async function resolveConfig(args, env = process.env, cwd = process.cwd()
   return {
     endpoint: String(args.endpoint ?? env.LINGUA_ENDPOINT ?? file.endpoint ?? 'http://localhost:5000').replace(/\/$/, ''),
     project: args.project ?? env.LINGUA_PROJECT ?? file.project,
+    // 写密钥（服务端配置了 Lingua:Distribution:WriteApiKey 时，push 必须携带）。
+    // 刻意不读 lingua.config.json：那个文件通常会提交进仓库，密钥只走命令行参数或环境变量（CI 里放进 secret）。
+    writeKey: args.key ?? env.LINGUA_WRITE_KEY ?? null,
     cultures: Array.isArray(cultures) ? cultures : cultures ? String(cultures).split(',').map((s) => s.trim()).filter(Boolean) : null,
     defaultCulture: args['default-culture'] ?? file.defaultCulture ?? null,
     out: path.resolve(cwd, args.out ?? file.out ?? 'src/locales'),
@@ -87,7 +90,14 @@ async function failure(res, what) {
   } catch {
     // 读不到响应体就只报状态码
   }
-  const hint = res.status === 404 ? '（检查项目编码与是否已发布）' : '';
+  const hint =
+    res.status === 404
+      ? '（检查项目编码与是否已发布）'
+      : res.status === 401
+        ? '（服务端要求写密钥：用 --key 或环境变量 LINGUA_WRITE_KEY 提供，对应服务端的 Lingua:Distribution:WriteApiKey）'
+        : res.status === 403
+          ? '（写密钥不匹配：检查 --key / LINGUA_WRITE_KEY 与服务端 Lingua:Distribution:WriteApiKey 是否一致）'
+          : '';
   return new Error(`${what}失败：HTTP ${res.status} ${detail}${hint}`);
 }
 
@@ -190,7 +200,7 @@ export async function push(cfg, args, log = console.log) {
     const url = `${cfg.endpoint}/api/v1/projects/${encodeURIComponent(cfg.project)}/import-json?${qs}`;
     const res = await request(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...(cfg.writeKey ? { 'X-Lingua-Key': cfg.writeKey } : {}) },
       body
     });
     if (!res.ok) throw await failure(res, `导入 ${file} `);
@@ -202,6 +212,22 @@ export async function push(cfg, args, log = console.log) {
         (r.needsReview ? `，${r.needsReview} 条进入待复核` : '') +
         (r.staleMarked ? `，${r.staleMarked} 条因源文案变化待复核` : '')
     );
+
+    if (r.pathConflictCount) {
+      const sample = (r.pathConflicts ?? []).slice(0, 3).join('；');
+      log(
+        `[lingua-sync] 警告：本次导入引入 ${r.pathConflictCount} 处键路径冲突（根 Key 与同名命名空间撞车），发布门禁默认会拦截` +
+          (sample ? `：${sample}` : '')
+      );
+    }
+
+    if (r.caseDuplicateCount) {
+      const sample = (r.caseDuplicates ?? []).slice(0, 3).join('；');
+      log(
+        `[lingua-sync] 提示：${file} 里有 ${r.caseDuplicateCount} 处仅大小写不同的重复词条（命名空间 / Key 不区分大小写，已合并为同一个词条）` +
+          (sample ? `：${sample}` : '')
+      );
+    }
 
     if (r.published) log('[lingua-sync] 已发布。');
     if (r.publishBlockedReason) log(`[lingua-sync] 导入成功，但发布被门禁拦截：${r.publishBlockedReason}`);
@@ -342,6 +368,8 @@ export const HELP = `lingua-sync <command> [options]
 push
   --dir <dir>          存量 locales 目录（默认同 --out）
   --publish            导入后立即发布（受发布门禁约束）
+  --key <secret>       写密钥 (LINGUA_WRITE_KEY)：服务端配置了 Lingua:Distribution:WriteApiKey 时必填；
+                       密钥不会从 lingua.config.json 读取，CI 里请用环境变量，避免出现在进程列表里
 
 check
   --remote             检查线上版本，而不是本地文件

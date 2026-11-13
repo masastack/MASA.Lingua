@@ -61,6 +61,7 @@ npx lingua-sync check --remote
 | `--project` | `LINGUA_PROJECT` | 项目编码 |
 | `--cultures a,b` | `LINGUA_CULTURES` | 只处理这些语种（逗号分隔，也可在配置文件里写成数组） |
 | `--default-culture` | — | `check` 的源语种；缺省按 manifest（`--remote`）或 `lingua.lock.json` 的 `defaultCulture` 推断 |
+| `--key <密钥>` | `LINGUA_WRITE_KEY` | 写密钥，仅 `push` 用：服务端配置了 `Lingua:Distribution:WriteApiKey` 时必填，见 [push](#push导入存量语言包)。**不会**从 `lingua.config.json` 读取 |
 | `--out <dir>` | — | 本地语言包目录，默认 `src/locales` |
 | `--src <dir>` | — | `check` 扫描的源码目录，默认 `src` |
 | `--config <file>` | — | 配置文件，默认 `./lingua.config.json` |
@@ -95,7 +96,18 @@ lingua-sync push --dir src/locales --publish         # 导入后立即发布（�
 
 - **目标项目必须已经在平台里存在**，`push` 不会创建项目（对不存在的项目服务端返回 404；脚本化接入可先调
   `POST /api/v1/projects/{项目}` 幂等创建，见 [README](README.md)）。
-- 平台对导入不设密钥，`push` 不需要任何凭据（项目写密钥只用于服务端 SDK 的缺词上报）；能否推送取决于服务端是否可达。
+- 服务端**默认**不对导入设密钥，此时 `push` 不需要任何凭据（项目写密钥只用于服务端 SDK 的缺词上报），能否推送取决于服务端是否可达。
+  如果服务端配置了共享写密钥 `Lingua:Distribution:WriteApiKey`（见 [README 的访问策略](README.md)），`push` 必须带上它：
+
+  ```bash
+  # 推荐：环境变量（CI 里放进 secret），不会出现在进程列表 / shell 历史里
+  LINGUA_WRITE_KEY=... lingua-sync push --dir src/locales
+  # 或命令行参数（本机临时使用）
+  lingua-sync push --dir src/locales --key ...
+  ```
+
+  没带返回 `HTTP 401`、密钥不对返回 `HTTP 403`，报错信息里会提示怎么补。密钥只来自 `--key` / `LINGUA_WRITE_KEY`，
+  **不要**写进会提交到仓库的 `lingua.config.json`（CLI 也不会读那里）。这把共享密钥不是项目的写密钥，两者不通用。
 - 顶层扁平 key 的归属命名空间由 `--default-ns` 决定，**默认 `common`**。平铺错误码这类要发布成
   JSON 根级裸 key 的词条，必须显式传 `--default-ns ''`（留空 = 项目根）——放进 `common` 会发布成嵌套对象，平铺 key 永远命不中。
 - `--publish` 只在**最后一个**文件上生效（多语种时前面几个文件只导入）。

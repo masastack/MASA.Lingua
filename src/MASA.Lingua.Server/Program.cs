@@ -56,6 +56,11 @@ builder.Services.AddLinguaEfCoreStorage(builder.Configuration);
 
 builder.Services.AddLinguaAi(builder.Configuration);
 
+// 分发写端点（创建/删除/导入/导出）的可选共享密钥门禁（Lingua:Distribution:WriteApiKey）：
+// 留空 = 匿名放行（内网受控网段部署的既有默认）；配置后写端点必须携带匹配的 X-Lingua-Key，防端口误暴露公网后被任意写入。
+builder.Services.Configure<LinguaDistributionOptions>(
+    builder.Configuration.GetSection(LinguaDistributionOptions.SectionName));
+
 // 静态文件 {culture}.json 发布器与 SSE 广播器（发布通知的唯一实时通道）
 builder.Services.AddSingleton<LinguaSseBroadcaster>();
 builder.Services.AddSingleton<AdoptionTracker>();
@@ -189,7 +194,8 @@ if (!app.Environment.IsDevelopment())
     app.UseResponseCompression();
 }
 
-// 应用数据库迁移并写入种子数据；随后从已发布的静态文件恢复内存缓存。
+// 每次启动都执行 EF Core 迁移（有待执行的迁移才执行、结果写日志、失败直接终止启动，写法参照 MASA.Auth 的 MigrateDbContextAsync），
+// 再在空库时写入种子数据；随后从已发布的静态文件恢复内存缓存。后台服务在 app.Run() 才启动，此时表结构一定已是最新。
 // 启动不再无条件重新发布：重启不会产生新版本、不会广播，更不会把未发布的草稿推上线（仅从未发布过的项目做一次引导发布）。
 await app.Services.InitializeLinguaDatabaseAsync();
 using (var scope = app.Services.CreateScope())

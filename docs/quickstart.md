@@ -34,6 +34,8 @@ curl -X POST http://localhost:62641/api/v1/projects/demo
 # {"project":"demo","defaultCulture":"zh-CN","created":true,"writeKey":"..."}
 ```
 
+- If the server sets `Lingua:Distribution:WriteApiKey`, add `-H "X-Lingua-Key: <that key>"` to the create, import and delete calls (`401` without it, `403` if it does not match). It is a shared deployment key, not the per-project `writeKey` below.
+- Project codes may only contain ASCII letters, digits, `-` and `_` (1–64 characters); anything else is rejected with `400`.
 - Idempotent: creating an existing project returns `200` with `created: false` and changes nothing.
 - `writeKey` (returned only on creation) authenticates missing-key telemetry; save it if you plan to use server-side SDK telemetry.
 - Default cultures: `zh-CN` default, `zh-CN` / `en-US` / `ja-JP` supported. Cultures are extended automatically at import time.

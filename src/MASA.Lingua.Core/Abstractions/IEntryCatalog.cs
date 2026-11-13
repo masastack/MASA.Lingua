@@ -25,6 +25,10 @@ public sealed record TranslationUpsertBatchItem(
 /// 写入遵循统一校验：要以「已审核 / AI 已译」入库的译文先过占位符 / 长度 / HTML / 术语校验，
 /// 违规时降级为待复核并写明原因（<c>acknowledgeIssues = true</c> 表示人工已确认）。
 /// </para>
+/// <para>
+/// 词条身份是 (命名空间编码, Key)，两段都<b>忽略大小写</b>（<see cref="LinguaKeys"/>）：按不同大小写写入（新增 / 更新 / 删除 / 导入 / 缺词上报）
+/// 命中的是同一个词条，库里保留首次创建时的写法。实现必须保证这一点——存储层的唯一性与本接口各方法的查找口径一致。
+/// </para>
 /// </summary>
 public interface IEntryCatalog
 {
@@ -70,7 +74,24 @@ public interface IEntryCatalog
         string key,
         CancellationToken ct = default);
 
+    /// <summary>
+    /// 缺词上报：为客户端报上来的缺失 (命名空间, Key) 创建草稿词条，返回新建条数。
+    /// 已存在的词条不重复创建；与项目现有词条会产生「键路径冲突」的上报（例如已有命名空间 Confirm 时又上报根裸 key Confirm）
+    /// 会被忽略 —— 自动上报不能凭空制造一个发布门禁必然拦截、嵌套 JSON 里必然丢内容的词条。
+    /// </summary>
     Task<int> RecordMissingKeysAsync(MissingKeyBatchReport report, CancellationToken ct = default);
+
+    /// <summary>
+    /// 预检：把 (命名空间, Key) 加入项目（<paramref name="projectCode"/> 传 <c>__shared__</c> 表示共享命名空间池）后，
+    /// 会与已有词条产生哪些键路径冲突。返回人话描述，空列表表示没有冲突；该 (命名空间, Key) 已存在时不算冲突。
+    /// 供「新增词条」入口在落库前提示，不改任何数据。
+    /// </summary>
+    Task<IReadOnlyList<string>> FindKeyPathConflictsAsync(
+        string projectCode,
+        string namespaceCode,
+        string key,
+        CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<string>>([]);
 
     /// <summary>
     /// 按优先级构建指定项目与语种的合并图层（SharedFallback -> SharedTarget -> ProjectFallback -> ProjectTarget）

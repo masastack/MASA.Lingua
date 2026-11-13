@@ -1,5 +1,6 @@
 using System.Collections.Frozen;
 using System.Security.Cryptography;
+using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Serialization;
 
 namespace MASA.Lingua.Core.Compilation;
@@ -15,7 +16,8 @@ public sealed record CompiledBundle(
     string ContentHash,
     ReadOnlyMemory<byte> NestedJsonUtf8Bytes,
     ReadOnlyMemory<byte> FlatJsonUtf8Bytes,
-    FrozenDictionary<string, string> LookupEntries);
+    FrozenDictionary<string, string> LookupEntries,
+    int EntryCount);
 
 /// <summary>
 /// 多语言包预编译器：
@@ -29,7 +31,9 @@ public sealed class BundleCompiler
         string culture,
         IEnumerable<TranslationLayer> orderedLayers)
     {
-        var merged = new Dictionary<(string Namespace, string Key), string>();
+        // 图层按优先级由低到高叠加，同一词条（命名空间 / Key 忽略大小写）后者覆盖前者；
+        // 结果沿用最高优先级图层里的写法（先移除再写入，字典不会保留被覆盖项的旧写法）。
+        var merged = new Dictionary<(string Namespace, string Key), string>(LinguaKeys.EntryComparer);
 
         foreach (var layer in orderedLayers)
         {
@@ -37,7 +41,9 @@ public sealed class BundleCompiler
             {
                 if (!string.IsNullOrWhiteSpace(item.Value))
                 {
-                    merged[(item.Namespace, item.Key)] = item.Value;
+                    var identity = (item.Namespace, item.Key);
+                    merged.Remove(identity);
+                    merged[identity] = item.Value;
                 }
             }
         }
@@ -53,7 +59,28 @@ public sealed class BundleCompiler
     }
 
     /// <summary>
-    /// 由「已发布」的嵌套 JSON 字节还原编译产物（服务重启后从快照/磁盘恢复线上版本，字节与 ETag 与发布时完全一致）。
+    /// 由「已发布」的嵌套 + 扁平两种 JSON 字节原样还原编译产物（服务重启后从快照/磁盘恢复线上版本，
+    /// 两种表示的字节与 ETag 都与发布时逐字节一致）。
+    /// <para>
+    /// 必须两种字节一起还原：嵌套 JSON 无法表达键路径冲突（根裸 key 与同名命名空间共存、点分 key 与「命名空间 + key」
+    /// 拼出同一路径）里被挤掉的一侧，只拿嵌套字节去重建扁平，会让 .NET 客户端（只下载扁平）取词时静默丢掉那一侧，
+    /// 且 ETag 与发布时不同。
+    /// </para>
+    /// </summary>
+    /// <exception cref="System.Text.Json.JsonException">扁平字节不是合法 JSON（磁盘文件损坏）。</exception>
+    public CompiledBundle FromPublishedBytes(
+        string projectCode,
+        string culture,
+        byte[] nestedJsonUtf8Bytes,
+        byte[] flatJsonUtf8Bytes)
+    {
+        return CreateBundle(projectCode, culture, nestedJsonUtf8Bytes, flatJsonUtf8Bytes);
+    }
+
+    /// <summary>
+    /// 只有嵌套字节时的还原（旧版快照没有保存扁平产物）：扁平表示由嵌套内容重建，
+    /// 无键路径冲突的项目与发布时完全一致；存在冲突的项目，被嵌套挤掉的一侧无法从嵌套字节找回，
+    /// 调用方应优先使用 <see cref="FromPublishedBytes(string, string, byte[], byte[])"/> 或按草稿重编译。
     /// </summary>
     public CompiledBundle FromPublishedBytes(string projectCode, string culture, byte[] nestedJsonUtf8Bytes)
     {
@@ -67,9 +94,15 @@ public sealed class BundleCompiler
         string projectCode,
         string culture,
         byte[] nestedBytes,
-        IReadOnlyList<(string Namespace, string Key, string Value)> tuples)
+        IReadOnlyList<(string Namespace, string Key, string Value)> tuples) =>
+        CreateBundle(projectCode, culture, nestedBytes, JsonBundleConverter.ToFlatJsonUtf8Bytes(tuples, '.'));
+
+    private static CompiledBundle CreateBundle(
+        string projectCode,
+        string culture,
+        byte[] nestedBytes,
+        byte[] flatBytes)
     {
-        byte[] flatBytes = JsonBundleConverter.ToFlatJsonUtf8Bytes(tuples, '.');
         string nestedHash = Convert.ToHexString(SHA256.HashData(nestedBytes)).ToLowerInvariant()[..16];
         string flatHash = Convert.ToHexString(SHA256.HashData(flatBytes)).ToLowerInvariant()[..16];
 
@@ -82,7 +115,7 @@ public sealed class BundleCompiler
         string etag = $"\"lingua-{contentHash}\"";
 
         var lookup = JsonBundleConverter.FlattenToLookupDictionary(nestedBytes)
-            .ToFrozenDictionary(StringComparer.Ordinal);
+            .ToFrozenDictionary(LinguaKeys.Comparer);
 
         return new CompiledBundle(
             projectCode,
@@ -91,7 +124,30 @@ public sealed class BundleCompiler
             contentHash,
             nestedBytes,
             flatBytes,
-            lookup);
+            lookup,
+            CountFlatEntries(flatBytes));
+    }
+
+    /// <summary>
+    /// 扁平发布文件的词条数 = 客户端实际能取到的词条条数（每个顶层属性一条）。
+    /// 不能用 <see cref="CompiledBundle.LookupEntries"/> 的条数：它为每条词条存了点 / 冒号 / 混合三种别名键，数量是词条数的数倍。
+    /// 扁平字节不是合法 JSON 对象时抛出 <see cref="System.Text.Json.JsonException"/>（磁盘文件损坏）。
+    /// </summary>
+    private static int CountFlatEntries(byte[] flatBytes)
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(flatBytes);
+        if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object)
+        {
+            throw new System.Text.Json.JsonException("扁平多语言文件的根节点必须是 JSON 对象。");
+        }
+
+        var count = 0;
+        foreach (var _ in doc.RootElement.EnumerateObject())
+        {
+            count++;
+        }
+
+        return count;
     }
 
     /// <summary>

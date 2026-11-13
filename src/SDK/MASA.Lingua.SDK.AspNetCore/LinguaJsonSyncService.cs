@@ -87,7 +87,11 @@ public sealed class LinguaJsonSyncService(
         var manifestUrl = LinguaProtocol.Combine(Endpoint, LinguaProtocol.ManifestPath(_options.ProjectCode));
 
         using var req = NewRequest(manifestUrl);
-        if (!string.IsNullOrEmpty(_manifestEtag))
+        // manifest ETag 只能证明线上没变，不能证明本地文件还在（可能被清理 / 误删）。
+        // 「我们持有 ETag 的语种」缺了 {culture}.json 时就不带 If-None-Match 拉全量 manifest，
+        // 让下面的下载条件（DownloadCulturesAsync 里的 !File.Exists）把这些语种补回来 ——
+        // 否则 304 会永远跳过补盘（与 MAUI 端 LinguaLocalizer 同一套对账）。
+        if (!string.IsNullOrEmpty(_manifestEtag) && !HasMissingCacheFile())
         {
             req.Headers.TryAddWithoutValidation("If-None-Match", _manifestEtag);
         }
@@ -108,14 +112,16 @@ public sealed class LinguaJsonSyncService(
         var manifest = await res.Content.ReadFromJsonAsync<ProjectManifest>(LinguaJson.Protocol, ct)
                        ?? throw new InvalidOperationException("manifest 响应为空。");
 
+        // 语种名来自远端，会直接拼进本地路径（{LocalJsonDirectory}/{culture}.json）：不是安全文件名的条目一律跳过，
+        // 不让一份异常 / 被篡改的 manifest 把文件写到 i18n 目录之外（与 MAUI 端同一条规则）。
         // manifest 里重复的语种条目只取第一个：两份一样的并行任务会同时写同一个 {culture}.json
-        var entries = manifest.Cultures
+        var entries = SafeCultureEntries(manifest.Cultures, c => c.Culture)
             .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var changed = await DownloadCulturesAsync(
             // .NET 客户端优先下载扁平格式：没有键路径冲突的表达缺陷，两种表示拍平后的查询 key 完全一致
-            entries.Select(c => (c.Culture, c.ETag, string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl)).ToList(),
+            entries.Select(c => (c.Culture, c.ETag, (string?)(string.IsNullOrWhiteSpace(c.FlatUrl) ? c.Url : c.FlatUrl))).ToList(),
             client,
             ct);
 
@@ -123,6 +129,14 @@ public sealed class LinguaJsonSyncService(
         // 中途失败不把磁盘上还没有的语种列成「站点支持」，下次对账成功才会更新
         memoryStore.SetDefaultCulture(manifest.DefaultCulture);
         memoryStore.SetSupportedCultures(entries.Select(c => c.Culture).ToList());
+
+        // 平台已移除的语种顺手清掉过期的 ETag 记录（本地文件保留给离线兜底）：
+        // 否则该文件一旦丢失，HasMissingCacheFile 会让之后每次对账都退回全量 manifest
+        var alive = new HashSet<string>(entries.Select(c => c.Culture), StringComparer.OrdinalIgnoreCase);
+        foreach (var stale in _cultureEtags.Keys.Where(k => !alive.Contains(k)).ToList())
+        {
+            _cultureEtags.TryRemove(stale, out _);
+        }
 
         // 全部语种都成功后才推进版本与 manifest ETag；中途失败会在下次触发时重试
         var versionChanged = !string.Equals(_currentVersion, manifest.Version, StringComparison.Ordinal);
@@ -147,6 +161,14 @@ public sealed class LinguaJsonSyncService(
         CancellationToken ct = default,
         string? relativeUrl = null)
     {
+        // 语种名会变成本地文件名：公开方法的入口也要挡住路径分隔符 / ".." 等（manifest 与事件路径已在更早处过滤）
+        if (!LinguaCultureFiles.IsSafeCultureName(culture))
+        {
+            throw new ArgumentException(
+                $"语种名「{culture}」不能用作文件名：只允许字母、数字、连字符与下划线，长度不超过 {LinguaCultureFiles.MaxCultureNameLength}。",
+                nameof(culture));
+        }
+
         if (string.IsNullOrWhiteSpace(_options.ServerEndpoint))
         {
             return false;
@@ -155,10 +177,18 @@ public sealed class LinguaJsonSyncService(
         var client = customClient ?? httpClientFactory.CreateClient("LinguaClient");
         var url = LinguaProtocol.Combine(
             Endpoint,
-            relativeUrl ?? LinguaProtocol.BundlePath(_options.ProjectCode, culture));
+            // 默认下载扁平格式：.NET 客户端按「命名空间.key」扁平键取词，扁平文件才完整保留键路径冲突里被嵌套 JSON 挤掉的一侧
+            // （manifest / SSE 路径本就如此，这里的手动同步默认值与它们保持一致）
+            relativeUrl ?? LinguaProtocol.FlatBundlePath(_options.ProjectCode, culture));
+
+        // 本地 {culture}.json 的路径；未配置 LocalJsonDirectory（纯内存模式）时为 null。
+        var localPath = LocalCulturePath(culture);
 
         using var req = NewRequest(url);
-        if (_cultureEtags.TryGetValue(culture, out var lastEtag) && !string.IsNullOrWhiteSpace(lastEtag))
+        // 本地文件丢失（被清理 / 误删）时不带 If-None-Match：ETag 未变时 304 会让磁盘永远补不回来
+        if (_cultureEtags.TryGetValue(culture, out var lastEtag)
+            && !string.IsNullOrWhiteSpace(lastEtag)
+            && (localPath is null || File.Exists(localPath)))
         {
             req.Headers.TryAddWithoutValidation("If-None-Match", lastEtag);
         }
@@ -176,17 +206,16 @@ public sealed class LinguaJsonSyncService(
         // Windows 上 File.Move(overwrite: true) 在目标被另一个进程/句柄占用时会抛 UnauthorizedAccessException，
         // 而启动对账、SSE 事件、手动 SyncAllAsync 可能同时下载同一个语种 —— 必须按语种串行化写入，
         // 否则同步会整批失败（DownloadCulturesAsync 里任一失败都会向上抛）。
-        if (!string.IsNullOrWhiteSpace(_options.LocalJsonDirectory))
+        if (localPath is not null)
         {
             Directory.CreateDirectory(_options.LocalJsonDirectory);
-            var localPath = Path.Combine(_options.LocalJsonDirectory, $"{culture}.json");
             var gate = _cultureWriteLocks.GetOrAdd(culture, _ => new SemaphoreSlim(1, 1));
             await gate.WaitAsync(ct);
             var tempPath = Path.Combine(_options.LocalJsonDirectory, $"{culture}.{Guid.NewGuid():N}.tmp");
             try
             {
                 await File.WriteAllBytesAsync(tempPath, bytes, ct);
-                MoveWithRetry(tempPath, localPath);
+                await MoveWithRetryAsync(tempPath, localPath, ct);
             }
             finally
             {
@@ -370,8 +399,8 @@ public sealed class LinguaJsonSyncService(
 
         var client = customClient ?? httpClientFactory.CreateClient("LinguaClient");
 
-        // SSE 事件同样携带本次发布的全部语种：重复条目只取第一个
-        var entries = evt.Cultures
+        // SSE 事件同样携带本次发布的全部语种：不安全的语种名同样跳过（见 SafeCultureEntries），重复条目只取第一个
+        var entries = SafeCultureEntries(evt.Cultures, c => c.Culture)
             .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -404,7 +433,7 @@ public sealed class LinguaJsonSyncService(
     }
 
     /// <summary>
-    /// 并行下载 ETag 变化的语种（限流 <see cref="MaxParallelDownloads"/>）。
+    /// 并行下载 ETag 变化或本地文件缺失的语种（限流 <see cref="MaxParallelDownloads"/>）。
     /// 全部成功才算完成，任一失败直接抛出交由调用方退避重试；已成功的语种下次会被 ETag 跳过。
     /// 返回是否至少更新了一个语种。
     /// </summary>
@@ -413,9 +442,13 @@ public sealed class LinguaJsonSyncService(
         HttpClient client,
         CancellationToken ct)
     {
+        // ETag 持平但本地 {culture}.json 已丢失的语种也要重下（304 之外的第二条补盘路径）：
+        // SyncCultureFileAsync 检测到文件缺失时不会带 If-None-Match，304 不会再把补盘拦掉
         var pending = cultures
             .DistinctBy(c => c.Culture, StringComparer.OrdinalIgnoreCase)
-            .Where(c => !_cultureEtags.TryGetValue(c.Culture, out var held) || !string.Equals(held, c.ETag, StringComparison.Ordinal))
+            .Where(c => !_cultureEtags.TryGetValue(c.Culture, out var held)
+                        || !string.Equals(held, c.ETag, StringComparison.Ordinal)
+                        || (LocalCulturePath(c.Culture) is { } path && !File.Exists(path)))
             .ToList();
 
         if (pending.Count == 0)
@@ -525,8 +558,10 @@ public sealed class LinguaJsonSyncService(
     /// <summary>
     /// 覆盖式 Move：Windows 上目标文件正被其它句柄（杀软扫描、编辑器、另一个实例的读取）短暂占用时会抛
     /// <see cref="UnauthorizedAccessException"/> / <see cref="IOException"/>，重试几次即可，不应让整次同步失败。
+    /// 本服务跑在业务应用的进程里，重试等待用 <see cref="Task.Delay"/> 而不是 Thread.Sleep——
+    /// 同步阻塞在重试风暴（杀软扫描整个 i18n 目录）时会白占业务线程池的线程。
     /// </summary>
-    private static void MoveWithRetry(string source, string destination)
+    private static async Task MoveWithRetryAsync(string source, string destination, CancellationToken ct)
     {
         const int maxAttempts = 5;
         for (var attempt = 1; ; attempt++)
@@ -538,7 +573,7 @@ public sealed class LinguaJsonSyncService(
             }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException && attempt < maxAttempts)
             {
-                Thread.Sleep(TimeSpan.FromMilliseconds(20 * attempt));
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), ct);
             }
         }
     }
@@ -600,6 +635,40 @@ public sealed class LinguaJsonSyncService(
     }
 
     private string Endpoint => _options.ServerEndpoint!.TrimEnd('/');
+
+    /// <summary>
+    /// 只保留语种名能安全当文件名的条目；被拒绝的条目记一条警告（远端给了异常的语种名，值得排查，但不该让整次同步失败）。
+    /// </summary>
+    private IEnumerable<T> SafeCultureEntries<T>(IEnumerable<T> entries, Func<T, string> cultureOf)
+    {
+        foreach (var entry in entries)
+        {
+            var culture = cultureOf(entry);
+            if (LinguaCultureFiles.IsSafeCultureName(culture))
+            {
+                yield return entry;
+            }
+            else
+            {
+                logger.LogWarning(
+                    "项目 {Project} 的发布信息里有不能用作文件名的语种名「{Culture}」，已跳过该语种。",
+                    _options.ProjectCode, culture);
+            }
+        }
+    }
+
+    /// <summary>本地 i18n/{culture}.json 的完整路径；未配置 LocalJsonDirectory（纯内存模式）时为 null。</summary>
+    private string? LocalCulturePath(string culture) =>
+        string.IsNullOrWhiteSpace(_options.LocalJsonDirectory)
+            ? null
+            : Path.Combine(_options.LocalJsonDirectory, $"{culture}.json");
+
+    /// <summary>
+    /// 我们持有 ETag 的语种中，是否已有本地 {culture}.json 丢失（被清理 / 误删）。
+    /// 与 MAUI 端 LinguaLocalizer.HasMissingCacheFile 同一套对账：丢了就放弃 manifest 304 快路径，拉全量补盘。
+    /// </summary>
+    private bool HasMissingCacheFile() =>
+        _cultureEtags.Keys.Any(culture => LocalCulturePath(culture) is { } path && !File.Exists(path));
 
     private void StartLocalFileWatcher()
     {
@@ -663,7 +732,8 @@ public sealed class HttpMissingKeyReporter(
     private const string WriteKeyHeaderName = "X-Lingua-Key";
 
     private readonly LinguaClientOptions _options = optionsAccessor.Value;
-    private readonly ConcurrentDictionary<string, bool> _reportedKeys = new(StringComparer.Ordinal);
+    // 缺词按 (语种, 命名空间 / Key) 忽略大小写去重：Confirm 与 confirm 在服务端是同一个词条，只报一次
+    private readonly ConcurrentDictionary<string, bool> _reportedKeys = new(StringComparer.OrdinalIgnoreCase);
     private int _warnedNoKey;
 
     public void ReportMissingKey(string culture, string fullKey, string? defaultText = null)
@@ -695,8 +765,8 @@ public sealed class HttpMissingKeyReporter(
             try
             {
                 var splitIdx = fullKey.IndexOfAny(['.', ':']);
-                var ns = splitIdx > 0 ? fullKey[..splitIdx] : ""; // 无分隔符的裸 key 归属项目根
-                var key = splitIdx > 0 ? fullKey[(splitIdx + 1)..] : fullKey;
+                var ns = splitIdx > 0 ? fullKey[..splitIdx].Trim() : ""; // 无分隔符的裸 key 归属项目根
+                var key = (splitIdx > 0 ? fullKey[(splitIdx + 1)..] : fullKey).Trim();
 
                 using var client = httpClientFactory.CreateClient("LinguaClient");
                 var report = new MissingKeyBatchReport(

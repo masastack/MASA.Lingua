@@ -33,6 +33,10 @@ public sealed class AiTranslationService(
     /// <summary>在途模型请求数的上限（实例级；服务注册为单例，因此限制的是整个站点）。</summary>
     private readonly SemaphoreSlim _requestGate = new(Math.Max(1, options.Value.MaxConcurrency));
 
+    // 注意：刻意不实现 IDisposable。SemaphoreSlim 只有在访问 AvailableWaitHandle 时才会分配等待句柄，这里没有，
+    // 所以没有需要释放的非托管资源；而在容器关闭时 Dispose 它，反而会让仍在途的请求在 finally 里的 Release()
+    // 抛 ObjectDisposedException（盖掉真正的失败原因）。随服务实例一起被 GC 回收即可。
+
     public async Task<IReadOnlyList<AiTranslationResultItem>> TranslateBatchAsync(
         string projectCode,
         string sourceCulture,

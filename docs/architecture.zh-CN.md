@@ -71,7 +71,7 @@ flowchart LR
 
 关键性质：
 
-1. **确定性编译**——[BundleCompiler](../src/MASA.Lingua.Core/Compilation/BundleCompiler.cs) 按优先级合并各层（共享命名空间源语种 → 共享命名空间目标语种 → 项目源语种 → 项目目标语种），词条按 Ordinal 排序后序列化为规范化 JSON。相同输入必得字节相同的输出，因此 ETag（SHA-256 前 16 个十六进制字符）跨副本、跨重启、对未变化内容重复发布都稳定。
+1. **确定性编译**——[BundleCompiler](../src/MASA.Lingua.Core/Compilation/BundleCompiler.cs) 按优先级合并各层（共享命名空间源语种 → 共享命名空间目标语种 → 项目源语种 → 项目目标语种），词条按 Ordinal 排序后序列化为规范化 JSON。词条的身份是 (命名空间, Key) 的**忽略大小写**比较（[LinguaKeys](../src/MASA.Lingua.Core/Domain/LinguaKeys.cs)），存储层用 `lower(...)` 唯一索引保证同一规则，因此项目词条即便大小写写法不同也会覆盖共享词条，产物里沿用词条首次创建时的写法。相同输入必得字节相同的输出，因此 ETag（SHA-256 前 16 个十六进制字符）跨副本、跨重启、对未变化内容重复发布都稳定。
 2. **重启恢复**——服务启动时从数据库快照还原已发布 bundle（`FromPublishedBytes`），保证 ETag 与客户端已缓存的完全一致。
 3. **分层回退**——目标语种没有「已批准」译文的词条在编译期回退为源语种文案；已发布词条的 key 不会下发到客户端。
 
@@ -79,16 +79,18 @@ flowchart LR
 
 | 端点 | 语义 |
 |---|---|
-| `GET /i18n/{project}/{culture}.json` | 已发布 bundle；强 ETag + `Cache-Control: no-cache`；未变化返回 `304`。`?format=flat` 输出扁平变体（独立 ETag）。 |
+| `GET /i18n/{project}/{culture}.json` | 已发布 bundle；强 ETag + `Cache-Control: no-cache`；未变化返回 `304`。`?format=flat` 输出同一内容的扁平变体（共用同一个 ETag，由同时覆盖两种表示的指纹派生）。 |
 | `GET /api/v1/bundles/{project}/{culture}` | 同一内容的兼容路由。 |
 | `GET /api/v1/projects/{project}/manifest` | 版本指纹、已发布语种、默认语种。首次发布前 404。 |
 | `GET /api/v1/projects/{project}/glossary` | 生效术语库（全局 + 项目），带 ETag。 |
 | `GET /api/v1/projects/{project}/export-zip` | **当前编辑状态**（含未发布草稿）的全部语种。 |
 | `GET /api/v1/stream?project={project}` | SSE：发布/回滚事件，15s 心跳，`retry: 3000`，`Last-Event-ID` 补发各项目最近一次发布。 |
 | `POST /api/v1/projects/{project}` | 幂等创建项目骨架；新建时返回写密钥。 |
-| `DELETE /api/v1/projects/{project}` | 级联删除（词条、术语、发布历史）。 |
+| `DELETE /api/v1/projects/{project}` | 级联删除（词条、术语、发布历史），同时清除该项目的内存发布缓存与磁盘发布产物。 |
 | `POST /api/v1/projects/{project}/import-json` | 草稿导入（`publish=true` 时立即发布）；上限 10MB。 |
 | `POST /api/v1/telemetry/missing-keys` | 缺词上报；需项目写密钥（`X-Lingua-Key`）；仅服务端 SDK。 |
+
+**访问策略**：读端点永远匿名。写类端点（创建 / 删除项目、`import-json`、`export-zip`）默认匿名——预期部署在受控网段内。作为纵深防御，可配置 `Lingua:Distribution:WriteApiKey`（用足够长的随机串，经环境变量注入，不要提交进仓库）：配置后这四个端点必须携带匹配的 `X-Lingua-Key` 请求头（缺失 `401`、不匹配 `403`）。这把共享密钥与缺词上报用的「项目写密钥」是两回事。管理后台的「下载全语种 ZIP」不受影响——它走受 SSO 保护的 `GET /admin/projects/{project}/export-zip`。项目编码（PM Identity）同时是发布产物的目录名，因此只允许 ASCII 字母、数字、`-`、`_`（1–64 位），其余一律 `400`。
 
 **SSE 只承载「变了」的信号，不承载内容**：载荷含项目编码、各语种 ETag 与 `versionHash`；内容永远由客户端自己拉取。因此事件丢失、重复、乱序只影响延迟、不影响正确性——.NET SDK 另有空闲间隔对账兜底。
 

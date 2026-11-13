@@ -71,7 +71,7 @@ flowchart LR
 
 Key properties:
 
-1. **Deterministic compilation** — [BundleCompiler](../src/MASA.Lingua.Core/Compilation/BundleCompiler.cs) merges layers in priority order (shared namespace source culture → shared namespace target culture → project source culture → project target culture), sorts entries ordinal, and serializes to canonical JSON. The same input always produces byte-identical output, so the ETag (first 16 hex chars of the SHA-256) is stable across replicas, restarts and re-publishes of unchanged content.
+1. **Deterministic compilation** — [BundleCompiler](../src/MASA.Lingua.Core/Compilation/BundleCompiler.cs) merges layers in priority order (shared namespace source culture → shared namespace target culture → project source culture → project target culture), sorts entries ordinal, and serializes to canonical JSON. An entry's identity is its (namespace, key) pair compared **case-insensitively** ([LinguaKeys](../src/MASA.Lingua.Core/Domain/LinguaKeys.cs)) — storage enforces the same rule with `lower(...)` unique indexes — so a project entry overrides the shared one even if the casing differs, and the bundle carries the spelling the entry was first created with. The same input always produces byte-identical output, so the ETag (first 16 hex chars of the SHA-256) is stable across replicas, restarts and re-publishes of unchanged content.
 2. **Restart recovery** — on boot the server restores published bundles from database snapshots (`FromPublishedBytes`), guaranteeing the ETags match what clients already cached.
 3. **Layered fallback** — a translation without an approved value in the target culture falls back to the source culture text at compile time; clients never receive keys for published entries.
 
@@ -79,16 +79,18 @@ Key properties:
 
 | Endpoint | Semantics |
 |---|---|
-| `GET /i18n/{project}/{culture}.json` | Published bundle; strong ETag + `Cache-Control: no-cache`; `304` when unchanged. `?format=flat` serves the flat variant (separate ETag). |
+| `GET /i18n/{project}/{culture}.json` | Published bundle; strong ETag + `Cache-Control: no-cache`; `304` when unchanged. `?format=flat` serves the flat variant of the same content (shared ETag — derived from a fingerprint covering both representations). |
 | `GET /api/v1/bundles/{project}/{culture}` | Compatibility route for the same content. |
 | `GET /api/v1/projects/{project}/manifest` | Version fingerprint, published cultures, default culture. 404 until the first publish. |
 | `GET /api/v1/projects/{project}/glossary` | Effective glossary (global + project), ETagged. |
 | `GET /api/v1/projects/{project}/export-zip` | **Current edit state** (including unpublished drafts), all cultures. |
 | `GET /api/v1/stream?project={project}` | SSE: publish/rollback events, 15 s heartbeat, `retry: 3000`, `Last-Event-ID` catch-up of the latest publish per project. |
 | `POST /api/v1/projects/{project}` | Idempotent project skeleton creation; returns the write key on creation. |
-| `DELETE /api/v1/projects/{project}` | Cascading delete (entries, glossary, publish history). |
+| `DELETE /api/v1/projects/{project}` | Cascading delete (entries, glossary, publish history); also evicts the project's in-memory bundle cache and removes its published files on disk. |
 | `POST /api/v1/projects/{project}/import-json` | Draft import (or immediate publish with `publish=true`); 10 MB cap. |
 | `POST /api/v1/telemetry/missing-keys` | Missing-key telemetry; requires the project write key (`X-Lingua-Key`); server-side SDKs only. |
+
+**Access policy**: read endpoints are always anonymous. The write-style endpoints (project create / delete, `import-json`, `export-zip`) are anonymous by default — the intended deployment is a controlled network segment. As defence in depth, set `Lingua:Distribution:WriteApiKey` (use a long random value, inject it by environment variable, never commit it): those four endpoints then require a matching `X-Lingua-Key` header (`401` when missing, `403` when wrong). This shared key is separate from the per-project write key used by telemetry. The admin UI's "download all cultures" button is not affected — it uses the SSO-protected `GET /admin/projects/{project}/export-zip`. Project codes (the PM identity) double as the publish directory name, so they are restricted to ASCII letters, digits, `-` and `_` (1–64 characters) and anything else is rejected with `400`.
 
 **SSE carries only "changed" signals, never content**: payloads contain project code, per-culture ETags and `versionHash`; clients always fetch content themselves. Losing, duplicating or reordering events therefore only affects latency, never correctness — and the .NET SDK additionally reconciles on an idle interval.
 

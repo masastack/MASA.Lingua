@@ -6,7 +6,7 @@ using Microsoft.Extensions.Hosting;
 namespace MASA.Lingua.Tests;
 
 /// <summary>每个测试一份独立数据库与发布目录：并行运行的测试类之间不会互相污染，也不碰开发库与仓库里的 wwwroot。</summary>
-internal sealed class IsolatedLinguaFactory(bool configureAuth = true) : WebApplicationFactory<Program>
+internal sealed class IsolatedLinguaFactory(bool configureAuth = true, string? writeApiKey = null) : WebApplicationFactory<Program>
 {
     public string DatabaseName { get; } = PostgresServer.NewDatabaseName("lingua_iso");
 
@@ -25,6 +25,11 @@ internal sealed class IsolatedLinguaFactory(bool configureAuth = true) : WebAppl
         builder.UseSetting(WebHostDefaults.WebRootKey, WebRoot);
         // 发布产物默认落在 ContentRoot/App_Data（那是仓库里的服务端项目目录），测试必须指到临时目录
         builder.UseSetting(StaticBundlePublisher.BundleDirectoryKey, Path.Combine(WebRoot, "i18n"));
+        // 分发写端点的共享密钥门禁：默认不配（匿名，内网部署的既有默认）；门禁用例显式传入
+        if (writeApiKey is not null)
+        {
+            builder.UseSetting("Lingua:Distribution:WriteApiKey", writeApiKey);
+        }
         // 管理后台强制 SSO：测试只验证「未登录被拦」，不需要真实 IdP。
         // OIDC 元数据在 challenge 时才拉取，这里给一个不可达地址即可。
         // Auth:Authority 是启动期的显式覆盖分支：设了它就完全不碰 DCC/Redis，

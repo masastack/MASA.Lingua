@@ -2,7 +2,7 @@ using MASA.Lingua.Core.Serialization;
 
 namespace MASA.Lingua.Core.Compilation;
 
-/// <summary>两份语言包（嵌套 JSON）之间的差异：新增 / 修改 / 删除了多少个 key。</summary>
+/// <summary>两份语言包之间的差异：新增 / 修改 / 删除了多少个 key。</summary>
 public sealed record BundleDiffResult(int Added, int Changed, int Removed, IReadOnlySet<string> ChangedKeys)
 {
     public int Total => Added + Changed + Removed;
@@ -10,7 +10,9 @@ public sealed record BundleDiffResult(int Added, int Changed, int Removed, IRead
 
 public static class BundleDiff
 {
-    /// <param name="published">线上已发布的嵌套 JSON；null 表示还没发布过（草稿全部算新增）。</param>
+    /// <param name="published">线上已发布的 JSON；"hasPublished" 为 false 表示还没发布过（草稿全部算新增）。</param>
+    /// <param name="draft">草稿编译出的 JSON。两份必须是同一种表示；推荐传扁平 JSON —— 嵌套 JSON 无法表达键路径冲突里被挤掉的一侧，
+    /// 只改这一侧时嵌套字节不变，差异会漏报，而 .NET 客户端消费的恰恰是扁平文件。</param>
     public static BundleDiffResult Compare(ReadOnlySpan<byte> published, ReadOnlySpan<byte> draft, bool hasPublished = true)
     {
         var draftMap = ToMap(draft);
@@ -45,12 +47,12 @@ public static class BundleDiff
         return new BundleDiffResult(added, changed, removed, keys);
     }
 
-    private static Dictionary<string, string> ToMap(ReadOnlySpan<byte> nestedJson)
+    private static Dictionary<string, string> ToMap(ReadOnlySpan<byte> json)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var (ns, key, value) in JsonBundleConverter.ParseExistingJson(nestedJson, ""))
+        foreach (var (ns, key, value) in JsonBundleConverter.ParseExistingJson(json, ""))
         {
-            map[$"{ns}.{key}"] = value;
+            map[string.IsNullOrEmpty(ns) ? key : $"{ns}.{key}"] = value;
         }
 
         return map;

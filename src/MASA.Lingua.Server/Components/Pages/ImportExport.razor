@@ -191,6 +191,19 @@ else
                             </p>
                         }
 
+                        @if (report.Warnings.Count > 0)
+                        {
+                            <MAlert Type="@AlertTypes.Warning" Dense Class="mt-4 mb-0" Role="status">
+                                <div class="font-weight-medium">提示（不阻断发布）</div>
+                                <ul class="text-body-2 mb-0" aria-label="发布提示">
+                                    @foreach (var warning in report.Warnings)
+                                    {
+                                        <li>@warning</li>
+                                    }
+                                </ul>
+                            </MAlert>
+                        }
+
                         @if (report.CanPublish)
                         {
                             <MAlert Type="@AlertTypes.Success" Dense Class="mt-4 mb-0" Role="status">已通过发布前检查，点右上角「发布」上线。</MAlert>
@@ -290,6 +303,40 @@ else
                                 }
                                 涉及命名空间：<code>@string.Join(", ", _importResult.AffectedNamespaces.Select(ns => ns.Length == 0 ? "（项目根）" : ns))</code>
                             </MAlert>
+                            @if (_importResult.PathConflictCount > 0)
+                            {
+                                <MAlert Type="@AlertTypes.Warning" Dense Class="mt-3 mb-0" Role="alert">
+                                    <div class="font-weight-medium">导入的词条存在 @_importResult.PathConflictCount 处键路径冲突</div>
+                                    <ul class="text-body-2 mb-0" aria-label="键路径冲突明细">
+                                        @foreach (var conflict in _importResult.PathConflicts)
+                                        {
+                                            <li>@conflict</li>
+                                        }
+                                        @if (_importResult.PathConflictCount > _importResult.PathConflicts.Count)
+                                        {
+                                            <li>……另有 @(_importResult.PathConflictCount - _importResult.PathConflicts.Count) 处，可在「发布前检查」查看。</li>
+                                        }
+                                    </ul>
+                                    <div class="text-caption mt-1">词条已照常导入；发布门禁默认会拦截键路径冲突，请先调整命名（例如把根裸 key 挪进命名空间），或在发布策略里评估是否放行。</div>
+                                </MAlert>
+                            }
+                            @if (_importResult.CaseDuplicateCount > 0)
+                            {
+                                <MAlert Type="@AlertTypes.Info" Dense Class="mt-3 mb-0" Role="status">
+                                    <div class="font-weight-medium">导入文件里有 @_importResult.CaseDuplicateCount 处仅大小写不同的重复词条</div>
+                                    <ul class="text-body-2 mb-0" aria-label="大小写重复明细">
+                                        @foreach (var duplicate in _importResult.CaseDuplicates)
+                                        {
+                                            <li>@duplicate</li>
+                                        }
+                                        @if (_importResult.CaseDuplicateCount > _importResult.CaseDuplicates.Count)
+                                        {
+                                            <li>……另有 @(_importResult.CaseDuplicateCount - _importResult.CaseDuplicates.Count) 处。</li>
+                                        }
+                                    </ul>
+                                    <div class="text-caption mt-1">命名空间与 Key 不区分大小写，这些项已合并为同一个词条（文件中后出现的覆盖先出现的，库里保留首次创建时的写法）。建议统一文件里的写法。</div>
+                                </MAlert>
+                            }
                         }
                     </form>
                 </MCardText>
@@ -466,7 +513,9 @@ else
                                  Value="@_previewCulture" ValueChanged="OnPreviewCultureChanged"
                                  Dense Outlined HideDetails="true" Class="lingua-preview-culture" aria-label="预览语种" />
                         <MSpacer />
-                        <MButton Href="@($"/api/v1/projects/{project.Code}/export-zip")" target="_blank" rel="noopener">下载全语种 ZIP</MButton>
+                        @* 走管理后台自己的导出入口（SSO 登录）：浏览器导航带不了 X-Lingua-Key，
+                           指向公开的 /api/v1 端点会在配置了 Lingua:Distribution:WriteApiKey 后返回 401 *@
+                        <MButton Href="@($"/admin/projects/{Uri.EscapeDataString(project.Code)}/export-zip")" target="_blank" rel="noopener">下载全语种 ZIP</MButton>
                     </div>
 
                     @if (!_previewLoaded)

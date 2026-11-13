@@ -14,6 +14,44 @@ using Microsoft.Extensions.Options;
 namespace MASA.Lingua.SDK.MasaBlazor;
 
 /// <summary>
+/// 合并进 Masa.Blazor I18n 缓存前的键值表：Masa.Blazor 按忽略大小写匹配词条，因此用 OrdinalIgnoreCase 字典承载，
+/// 与 Lingua「命名空间 / Key 忽略大小写」的口径一致。新版 Lingua 服务端保证产物里没有仅大小写不同的 Key；
+/// 若连的是旧版服务端（存量数据里仍有 <c>Confirm.Title</c> 与 <c>confirm.title</c> 两条），进入这张表时后者会覆盖前者 ——
+/// 这里把「仅大小写不同的重复键」数出来并告警一次，而不是静默丢掉其中一条。
+/// </summary>
+internal sealed class MasaBlazorKeyMap
+{
+    private readonly Dictionary<string, string> _map = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _exactKeys = new(StringComparer.Ordinal);
+    private readonly List<string> _collisions = [];
+
+    public void Put(string key, string value)
+    {
+        // 精确键首次出现、但忽略大小写后已存在 = 仅大小写不同的重复（同一个精确键重复 Put 只是覆盖，不算）
+        var firstExactOccurrence = _exactKeys.Add(key);
+        if (firstExactOccurrence && _map.ContainsKey(key))
+        {
+            _collisions.Add(key);
+        }
+
+        _map[key] = value;
+    }
+
+    public Dictionary<string, string> Build(ILogger logger, string culture)
+    {
+        if (_collisions.Count > 0)
+        {
+            logger.LogWarning(
+                "语种 {Culture} 有 {Count} 处词条 Key 仅大小写不同（如 {Sample}），Masa.Blazor I18n 忽略大小写匹配，后者会覆盖前者。"
+                + "请在 Lingua 后台统一这些 Key 的写法（发布页「提示」里有明细）。",
+                culture, _collisions.Count, _collisions[0]);
+        }
+
+        return _map;
+    }
+}
+
+/// <summary>
 /// 词条合并进 Masa.Blazor I18n 缓存的公共路径，供独立拉取与共享 store 订阅两种模式复用。
 /// <para>
 /// 公开的 <see cref="I18n.AddLocale"/> 固定按「内置词条」合并（静态 JSON 反而会覆盖新词条），
@@ -102,7 +140,7 @@ public sealed class LinguaMasaBlazorI18nService(
                 // 优先扁平格式：Flatten 对嵌套 / 扁平两种形状产出同一份扁平键值表，而扁平文件没有键路径冲突的表达缺陷
                 var url = LinguaProtocol.Combine(endpoint, string.IsNullOrWhiteSpace(culture.FlatUrl) ? culture.Url : culture.FlatUrl);
                 var bundle = await http.GetFromJsonAsync<JsonElement>(url, JsonOptions, timeout.Token);
-                var map = Flatten(bundle);
+                var map = Flatten(bundle, logger, culture.Culture);
                 if (map.Count == 0)
                 {
                     continue;
@@ -127,12 +165,12 @@ public sealed class LinguaMasaBlazorI18nService(
     /// 根级裸 key（项目根命名空间）直接映射为全局 key（与 T(key) 查找一致）；
     /// 命名空间对象转 "{Namespace}.{key}"（与 T(scope, key) 的 "{scope}.{key}" 拼接查找一致）。
     /// </summary>
-    private static Dictionary<string, string> Flatten(JsonElement root)
+    private static Dictionary<string, string> Flatten(JsonElement root, ILogger logger, string culture)
     {
-        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var map = new MasaBlazorKeyMap();
         if (root.ValueKind != JsonValueKind.Object)
         {
-            return map;
+            return map.Build(logger, culture);
         }
 
         foreach (var property in root.EnumerateObject())
@@ -142,22 +180,22 @@ public sealed class LinguaMasaBlazorI18nService(
                 case JsonValueKind.Object:
                     foreach (var entry in EnumerateLeaves(property.Value, prefix: string.Empty))
                     {
-                        map[$"{property.Name}.{entry.Key}"] = entry.Value;
+                        map.Put($"{property.Name}.{entry.Key}", entry.Value);
                     }
                     break;
 
                 case JsonValueKind.String:
                     // 项目根：发布产物里的根级裸 key
-                    map[property.Name] = property.Value.GetString() ?? string.Empty;
+                    map.Put(property.Name, property.Value.GetString() ?? string.Empty);
                     break;
 
                 case JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False:
-                    map[property.Name] = property.Value.ToString();
+                    map.Put(property.Name, property.Value.ToString());
                     break;
             }
         }
 
-        return map;
+        return map.Build(logger, culture);
     }
 
     private static IEnumerable<KeyValuePair<string, string>> EnumerateLeaves(JsonElement element, string prefix)
@@ -234,12 +272,13 @@ public sealed class LinguaMasaBlazorStoreBridgeService(
         {
             // GetAll 返回「ns.key」点分与根级裸 key 两种形式（含 ':' 的冗余变体已被过滤），
             // 与 Masa.Blazor 的 T(key) / T(scope, key) 查找格式一致，无需再展平转换。
-            var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var keyMap = new MasaBlazorKeyMap();
             foreach (var kv in store.GetAll(culture))
             {
-                map[kv.Key] = kv.Value;
+                keyMap.Put(kv.Key, kv.Value);
             }
 
+            var map = keyMap.Build(logger, culture);
             if (map.Count == 0)
             {
                 return false;

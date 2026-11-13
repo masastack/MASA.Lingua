@@ -42,7 +42,7 @@ public sealed class PublishSnapshot
     public string? GateSummary { get; set; }
 
     /// <summary>
-    /// 各语种发布产物（gzip 压缩的 JSON：语种 → 嵌套 JSON 文本）。回滚就是把它重新发布为线上版本。
+    /// 各语种发布产物（gzip 压缩的 JSON：语种 → 嵌套 + 扁平 JSON 文本，格式见 <see cref="MASA.Lingua.Core.Publishing.SnapshotContentCodec"/>；旧版本只存嵌套）。回滚就是把它重新发布为线上版本。
     /// 只保留最近若干次快照的内容，更早的为 null（仍保留审计记录）。列表查询不加载此字段。
     /// </summary>
     public byte[]? Content { get; set; }

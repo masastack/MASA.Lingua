@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Localization;
 
 namespace MASA.Lingua.Core.Serialization;
@@ -80,22 +81,20 @@ public static class JsonBundleConverter
             }
             else if (topProp.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
             {
-                var rawKey = topProp.Name;
+                var rawKey = topProp.Name.Trim();
                 var val = topProp.Value.ToString();
 
                 // 检查扁平 Key 是否自带命名空间前缀（例如 "order:submit" 或 "order.submit"）
                 var splitIndex = rawKey.IndexOfAny([':', '.']);
                 if (splitIndex > 0 && splitIndex < rawKey.Length - 1)
                 {
-                    var ns = rawKey[..splitIndex];
-                    var key = rawKey[(splitIndex + 1)..].Replace(':', '.');
-                    EnsureKeySegments(ns, key);
-                    results.Add((ns, key, val));
+                    var ns = rawKey[..splitIndex].Trim();
+                    var key = NormalizeKeyPath(rawKey[(splitIndex + 1)..].Replace(':', '.'));
+                    AddParsed(results, ns, key, val);
                 }
                 else
                 {
-                    EnsureKeySegments(defaultNamespace, rawKey);
-                    results.Add((defaultNamespace, rawKey, val));
+                    AddParsed(results, defaultNamespace, NormalizeKeyPath(rawKey), val);
                 }
             }
         }
@@ -104,11 +103,48 @@ public static class JsonBundleConverter
     }
 
     /// <summary>
-    /// 将任意结构的 JSON（嵌套或扁平）展平为客户端内存查询字典，同时支持 "." 与 ":" 两种分隔符查找
+    /// 把词条的 (命名空间, Key) 归一化为发布 JSON 里的路径段序列 —— 嵌套 / 扁平两种发布格式与键路径冲突检测的唯一口径。
+    /// <para>
+    /// 规则：命名空间非空时在 key 前拼上命名空间；":" 与 "." 等价（都是层级分隔符）；
+    /// 逐段去掉首尾空白，丢弃空段。三处（嵌套建树 / 扁平拼 key / 冲突检测）必须共用这一个实现：
+    /// 它们各自取不同的规则时，就会出现「嵌套里是 A、扁平里是 B」的静默分叉（例如命名空间尾部带空格、
+    /// 根 key 含冒号），而客户端实际消费的恰恰是扁平表示。
+    /// </para>
+    /// </summary>
+    public static string[] ToPathSegments(string? namespaceCode, string? key)
+    {
+        var full = string.IsNullOrWhiteSpace(namespaceCode) ? key ?? string.Empty : $"{namespaceCode}.{key}";
+        return full.Replace(':', '.').Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static void AddParsed(
+        List<(string Namespace, string Key, string Value)> results,
+        string ns,
+        string key,
+        string value)
+    {
+        // 空 key 没有可发布的路径（嵌套 / 扁平发布时本就会被丢弃），不产出无意义的词条
+        if (key.Length == 0)
+        {
+            return;
+        }
+
+        EnsureKeySegments(ns, key);
+        results.Add((ns, key, value));
+    }
+
+    /// <summary>key 内的点分段去掉首尾空白与空段（保留 ":" 原样，是否归一由发布路径口径 <see cref="ToPathSegments"/> 决定）。</summary>
+    private static string NormalizeKeyPath(string key) =>
+        string.Join('.', key.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    /// <summary>
+    /// 将任意结构的 JSON（嵌套或扁平）展平为客户端内存查询字典，同时支持 "." 与 ":" 两种分隔符查找。
+    /// 键忽略大小写（<see cref="LinguaKeys.Comparer"/>）：与服务端「命名空间 / Key 忽略大小写唯一」的口径一致，
+    /// 取词时 <c>Order.Submit</c> 与 <c>order.submit</c> 命中同一条。
     /// </summary>
     public static Dictionary<string, string> FlattenToLookupDictionary(ReadOnlySpan<byte> utf8Json)
     {
-        var dict = new Dictionary<string, string>(StringComparer.Ordinal);
+        var dict = new Dictionary<string, string>(LinguaKeys.Comparer);
         // 顶层扁平 key 即项目根（发布产物里的根级裸 key），与导入语义一致
         var items = ParseExistingJson(utf8Json, "");
 
@@ -131,38 +167,54 @@ public static class JsonBundleConverter
     /// </summary>
     public static byte[] ToNestedJsonUtf8Bytes(IEnumerable<(string Namespace, string Key, string Value)> entries)
     {
-        var root = new SortedDictionary<string, object>(StringComparer.Ordinal);
+        // 建树时按忽略大小写合并同一位置（与「命名空间 / Key 忽略大小写唯一」一致），节点保留首次出现的写法；
+        // 输出时按该写法的序号顺序排列，所以没有仅大小写不同的路径时，字节与过去完全相同（ETag 不变）。
+        var root = new TreeNode(string.Empty) { Children = new Dictionary<string, TreeNode>(LinguaKeys.Comparer) };
 
         foreach (var (ns, key, value) in entries)
         {
-            var fullPath = string.IsNullOrWhiteSpace(ns) ? key : $"{ns}.{key.Replace(':', '.')}";
-            var segments = fullPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var segments = ToPathSegments(ns, key);
             if (segments.Length == 0)
             {
                 continue;
             }
 
-            IDictionary<string, object> current = root;
+            var current = root;
             for (int i = 0; i < segments.Length - 1; i++)
             {
                 var seg = segments[i];
-                if (!current.TryGetValue(seg, out var child) || child is not IDictionary<string, object> childDict)
+                current.Children!.TryGetValue(seg, out var child);
+                if (child?.Children is null)
                 {
-                    childDict = new SortedDictionary<string, object>(StringComparer.Ordinal);
-                    current[seg] = childDict;
+                    // 此位置不存在，或此前被当作「值」占用：后写入的父级对象取代它（键路径冲突，由发布门禁提示）
+                    child = new TreeNode(child?.Name ?? seg) { Children = new Dictionary<string, TreeNode>(LinguaKeys.Comparer) };
+                    current.Children[seg] = child;
                 }
-                current = childDict;
+
+                current = child;
             }
 
-            current[segments[^1]] = value;
+            var last = segments[^1];
+            current.Children!.TryGetValue(last, out var existing);
+            current.Children[last] = new TreeNode(existing?.Name ?? last) { Value = value };
         }
 
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms, IndentedWriterOptions))
         {
-            WriteDictionary(writer, root);
+            WriteNode(writer, root);
         }
         return ms.ToArray();
+    }
+
+    /// <summary>嵌套发布 JSON 的建树节点：<see cref="Children"/> 非空表示对象，否则 <see cref="Value"/> 是字符串叶子。</summary>
+    private sealed class TreeNode(string name)
+    {
+        public string Name { get; } = name;
+
+        public string? Value { get; init; }
+
+        public Dictionary<string, TreeNode>? Children { get; init; }
     }
 
     /// <summary>
@@ -172,23 +224,28 @@ public static class JsonBundleConverter
         IEnumerable<(string Namespace, string Key, string Value)> entries,
         char separator = '.')
     {
-        var sorted = new SortedDictionary<string, string>(StringComparer.Ordinal);
+        // 同一路径按忽略大小写合并（后写入的值覆盖前者，写法保留首次出现的那个），与嵌套建树的口径一致
+        var merged = new Dictionary<string, (string Name, string Value)>(LinguaKeys.Comparer);
         foreach (var (ns, key, value) in entries)
         {
-            var normalizedKey = key.Replace(':', separator).Replace('.', separator);
-            var fullKey = string.IsNullOrWhiteSpace(ns)
-                ? normalizedKey
-                : $"{ns}{separator}{normalizedKey}";
-            sorted[fullKey] = value;
+            // 与嵌套建树共用同一路径口径：两种发布表示对同一词条给出同一条路径，只是呈现方式不同
+            var segments = ToPathSegments(ns, key);
+            if (segments.Length == 0)
+            {
+                continue;
+            }
+
+            var path = string.Join(separator, segments);
+            merged[path] = (merged.TryGetValue(path, out var existing) ? existing.Name : path, value);
         }
 
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms, IndentedWriterOptions))
         {
             writer.WriteStartObject();
-            foreach (var kv in sorted)
+            foreach (var item in merged.Values.OrderBy(v => v.Name, StringComparer.Ordinal))
             {
-                writer.WriteString(kv.Key, kv.Value);
+                writer.WriteString(item.Name, item.Value);
             }
             writer.WriteEndObject();
         }
@@ -210,25 +267,24 @@ public static class JsonBundleConverter
             }
             else if (prop.Value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False)
             {
-                EnsureKeySegments(ns, currentKey);
-                output.Add((ns, currentKey, prop.Value.ToString()));
+                AddParsed(output, ns, NormalizeKeyPath(currentKey), prop.Value.ToString());
             }
         }
     }
 
-    private static void WriteDictionary(Utf8JsonWriter writer, IDictionary<string, object> dict)
+    private static void WriteNode(Utf8JsonWriter writer, TreeNode node)
     {
         writer.WriteStartObject();
-        foreach (var (k, v) in dict)
+        foreach (var child in node.Children!.Values.OrderBy(c => c.Name, StringComparer.Ordinal))
         {
-            writer.WritePropertyName(k);
-            if (v is IDictionary<string, object> childDict)
+            writer.WritePropertyName(child.Name);
+            if (child.Children is not null)
             {
-                WriteDictionary(writer, childDict);
+                WriteNode(writer, child);
             }
             else
             {
-                writer.WriteStringValue(v?.ToString() ?? string.Empty);
+                writer.WriteStringValue(child.Value ?? string.Empty);
             }
         }
         writer.WriteEndObject();
@@ -255,13 +311,16 @@ public static class JsonBundleConverter
     /// 典型冲突：词条「Confirm」（项目根）与命名空间「Confirm」——发布 JSON 的 "Confirm" 位置
     /// 无法既是字符串又是对象。该检测让这种「静默丢内容」在发布门禁处显式暴露，而不是发布后悄悄消失。
     /// </para>
+    /// <para>路径各段忽略大小写比较（<see cref="LinguaKeys.Comparer"/>）：<c>Confirm.Title</c> 与 <c>confirm.title</c> 占用同一个位置。
+    /// 同一个 (Namespace, Key)（忽略大小写，见 <see cref="LinguaKeys.EntryComparer"/>）就是同一个词条，只算一条；
+    /// 写法不同但路径相同的<b>不同</b>词条（如根 Key <c>A.b</c> 与命名空间 <c>a</c> 下的 Key <c>B</c>）才是完全重复的路径冲突。</para>
     /// <para>传入的词条必须先按发布口径合并（同 (Namespace, Key) 去重，如共享层被项目层覆盖），
-    /// 检测结果与实际发布内容的冲突情况一致。同 (Namespace, Key) 的重复项不会被误报为冲突。</para>
+    /// 检测结果与实际发布内容的冲突情况一致。完全相同的 (Namespace, Key) 重复项不会被误报为冲突。</para>
     /// </summary>
     public static IReadOnlyList<KeyPathConflict> DetectPathConflicts(IEnumerable<(string Namespace, string Key)> entries)
     {
         var root = new ConflictNode();
-        var seen = new HashSet<(string Namespace, string Key)>();
+        var seen = new HashSet<(string Namespace, string Key)>(LinguaKeys.EntryComparer);
         foreach (var entry in entries)
         {
             // 同 (Namespace, Key) 只算一条（发布前已按图层合并去重；这里再兜一层，重复输入不会误报为冲突）
@@ -270,11 +329,8 @@ public static class JsonBundleConverter
                 continue;
             }
 
-            // 与 ToNestedJsonUtf8Bytes 相同的路径计算与分段规则（空命名空间不带点拼接）
-            var fullPath = string.IsNullOrWhiteSpace(entry.Namespace)
-                ? entry.Key
-                : $"{entry.Namespace}.{entry.Key.Replace(':', '.')}";
-            var segments = fullPath.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            // 与 ToNestedJsonUtf8Bytes / ToFlatJsonUtf8Bytes 共用同一路径计算与分段规则
+            var segments = ToPathSegments(entry.Namespace, entry.Key);
             if (segments.Length == 0)
             {
                 continue;
@@ -297,7 +353,8 @@ public static class JsonBundleConverter
 
     private sealed class ConflictNode
     {
-        public Dictionary<string, ConflictNode> Children { get; } = new(StringComparer.Ordinal);
+        // 忽略大小写：仅大小写不同的路径是同一个位置（被两个词条占用即重复）
+        public Dictionary<string, ConflictNode> Children { get; } = new(LinguaKeys.Comparer);
 
         /// <summary>把这个位置当作「值」的词条（路径终点落在这里）。</summary>
         public List<(string Namespace, string Key)> ValueClaims { get; } = [];

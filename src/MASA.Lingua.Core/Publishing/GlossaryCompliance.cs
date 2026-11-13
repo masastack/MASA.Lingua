@@ -122,7 +122,7 @@ public static class SharedImpact
             var overridden = project.Namespaces.Any(n =>
                 !n.IsShared &&
                 string.Equals(n.Code, namespaceCode, StringComparison.OrdinalIgnoreCase) &&
-                n.EntryKeys.Contains(entryKey)); // 哈希集合（Ordinal）O(1)；带 comparer 的扩展方法会退化成线性扫描
+                n.EntryKeys.Contains(entryKey)); // 哈希集合 O(1)，集合本身按 LinguaKeys.Comparer（忽略大小写）构建；带 comparer 的扩展方法会退化成线性扫描
             if (overridden)
             {
                 overriding.Add(project.Code);

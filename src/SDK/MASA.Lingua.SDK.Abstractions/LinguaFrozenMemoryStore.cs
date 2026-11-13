@@ -1,4 +1,5 @@
 using System.Collections.Frozen;
+using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Serialization;
 
 namespace MASA.Lingua.SDK.Abstractions;
@@ -113,16 +114,19 @@ public sealed class LinguaFrozenMemoryStore(ILinguaChangeNotifier? notifier = nu
             return dict.Where(kv => !kv.Key.Contains(':'));
         }
 
+        // 命名空间忽略大小写（LinguaKeys）：IStringLocalizer<OrderController> 的 order. 前缀也能列出库里 Order 命名空间的词条
         var dotPrefix = $"{namespacePrefix}.";
         return dict
-            .Where(kv => kv.Key.StartsWith(dotPrefix, StringComparison.Ordinal))
+            .Where(kv => kv.Key.StartsWith(dotPrefix, LinguaKeys.Comparison))
             .Select(kv => new KeyValuePair<string, string>(kv.Key[dotPrefix.Length..], kv.Value));
     }
 
     public void UpdateCultureFromJsonBytes(string culture, ReadOnlySpan<byte> utf8Json)
     {
+        // 取词不区分大小写：词条 Key 与命名空间在 Lingua 里就是忽略大小写唯一的（LinguaKeys），
+        // 业务代码写 Confirm / confirm 取到的是同一条
         var flattened = JsonBundleConverter.FlattenToLookupDictionary(utf8Json)
-            .ToFrozenDictionary(StringComparer.Ordinal);
+            .ToFrozenDictionary(LinguaKeys.Comparer);
 
         lock (_writeLock)
         {

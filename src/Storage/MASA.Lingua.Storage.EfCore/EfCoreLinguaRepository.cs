@@ -2,6 +2,7 @@ using MASA.Lingua.Core.Abstractions;
 using MASA.Lingua.Core.Compilation;
 using MASA.Lingua.Core.Domain;
 using MASA.Lingua.Core.Localization;
+using MASA.Lingua.Core.Publishing;
 using MASA.Lingua.Core.Serialization;
 using MASA.Lingua.Core.Validation;
 using Microsoft.EntityFrameworkCore;
@@ -169,7 +170,9 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             .Where(e => !e.Namespace!.IsShared
                         && e.Namespace.ProjectId != null
                         && db.TranslationEntries.Any(s =>
-                            s.Namespace!.IsShared && s.Namespace.Code == e.Namespace.Code && s.Key == e.Key))
+                            s.Namespace!.IsShared
+                            && s.Namespace.Code.ToLower() == e.Namespace.Code.ToLower()
+                            && s.Key.ToLower() == e.Key.ToLower()))
             .Select(e => new { e.Namespace!.ProjectId, NamespaceCode = e.Namespace.Code, e.Key })
             .ToListAsync(ct);
 
@@ -178,11 +181,11 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             .ToDictionary(
                 g => g.Key,
                 g => (IReadOnlyList<ImpactNamespace>)g
-                    .GroupBy(o => o.NamespaceCode, StringComparer.Ordinal)
+                    .GroupBy(o => o.NamespaceCode, LinguaKeys.Comparer)
                     .Select(ns => new ImpactNamespace(
                         ns.Key,
                         false,
-                        ns.Select(o => o.Key).ToHashSet(StringComparer.Ordinal)))
+                        ns.Select(o => o.Key).ToHashSet(LinguaKeys.Comparer)))
                     .ToList());
 
         var data = projects
@@ -254,8 +257,15 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             .FirstOrDefaultAsync(p => p.Code == projectCode, ct);
     }
 
-    public async Task<Project> CreateProjectAsync(string projectCode, CancellationToken ct = default)
+    public async Task<Project> CreateProjectAsync(string projectCode, CancellationToken ct = default) =>
+        (await CreateProjectIfAbsentAsync(projectCode, ct)).Project;
+
+    public async Task<ProjectCreationResult> CreateProjectIfAbsentAsync(string projectCode, CancellationToken ct = default)
     {
+        // 编码会用作发布产物目录名（App_Data/i18n/{code}）参与磁盘路径：HTTP 端点与管理后台共用这一入口，
+        // 统一在这里拒绝路径穿越写法（/ \ .. 等只可能是恶意构造——PM Identity 不会包含这些字符）
+        projectCode = LinguaProjectCodes.EnsureValid(projectCode);
+
         await using var db = await dbFactory.CreateDbContextAsync(ct);
 
         var existing = await db.Projects
@@ -267,7 +277,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             .FirstOrDefaultAsync(p => p.Code == projectCode, ct);
         if (existing is not null)
         {
-            return existing;
+            return new ProjectCreationResult(existing, Created: false);
         }
 
         // 实体默认值即骨架形状：DefaultCulture zh-CN、SupportedCultures zh-CN/en-US/ja-JP、
@@ -298,10 +308,12 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             {
                 throw;
             }
-            return raced;
+
+            // 输掉创建竞争：这一行不是本调用方创建的，Created = false（调用方据此不返回写密钥）
+            return new ProjectCreationResult(raced, Created: false);
         }
 
-        return project;
+        return new ProjectCreationResult(project, Created: true);
     }
 
     public async Task<string?> RegenerateWriteKeyAsync(Guid projectId, CancellationToken ct = default)
@@ -355,12 +367,12 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             return null;
         }
 
-        var sharedCodes = project.SharedNamespaceCodes;
+        var sharedCodes = LinguaKeys.FoldAll(project.SharedNamespaceCodes);
         var shared = sharedCodes.Count == 0
             ? []
             : await db.TranslationNamespaces
                 .AsNoTracking()
-                .Where(n => n.IsShared && sharedCodes.Contains(n.Code))
+                .Where(n => n.IsShared && sharedCodes.Contains(n.Code.ToLower()))
                 .Include(n => n.Entries)
                     .ThenInclude(e => e.Translations)
                 .OrderBy(n => n.Code)
@@ -436,7 +448,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         if (string.Equals(projectCode, "__shared__", StringComparison.OrdinalIgnoreCase))
         {
             ns = await db.TranslationNamespaces
-                .FirstOrDefaultAsync(n => n.IsShared && n.Code == namespaceCode, ct);
+                .FirstOrDefaultAsync(n => n.IsShared && n.Code.ToLower() == LinguaKeys.Fold(namespaceCode), ct);
 
             if (ns is null)
             {
@@ -458,7 +470,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             scopeProjectId = project.Id;
 
             ns = await db.TranslationNamespaces
-                .FirstOrDefaultAsync(n => n.ProjectId == project.Id && n.Code == namespaceCode, ct);
+                .FirstOrDefaultAsync(n => n.ProjectId == project.Id && n.Code.ToLower() == LinguaKeys.Fold(namespaceCode), ct);
 
             if (ns is null)
             {
@@ -480,7 +492,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             ? null
             : await db.TranslationEntries
                 .Include(e => e.Translations)
-                .FirstOrDefaultAsync(e => e.NamespaceId == ns.Id && e.Key == key, ct);
+                .FirstOrDefaultAsync(e => e.NamespaceId == ns.Id && e.Key.ToLower() == LinguaKeys.Fold(key), ct);
         var sourceChanged = false;
         if (entry is null)
         {
@@ -561,18 +573,20 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
 
         // 每个命名空间只查一次命名空间本身，再只取这批涉及的词条（按 Key 过滤，带译文）；
         // 不存在则按需创建，稍后统一 SaveChanges。不再把整个命名空间的全部词条都读进来。
-        var namespaces = new Dictionary<string, TranslationNamespace>(StringComparer.Ordinal);
-        var entriesByNamespace = new Dictionary<string, Dictionary<string, TranslationEntry>>(StringComparer.Ordinal);
-        foreach (var group in items.GroupBy(i => i.NamespaceCode ?? "", StringComparer.Ordinal))
+        // 命名空间编码 / Key 忽略大小写（LinguaKeys）：写法不同的同一词条落在同一条上，库里保留首次创建时的写法
+        var namespaces = new Dictionary<string, TranslationNamespace>(LinguaKeys.Comparer);
+        var entriesByNamespace = new Dictionary<string, Dictionary<string, TranslationEntry>>(LinguaKeys.Comparer);
+        foreach (var group in items.GroupBy(i => i.NamespaceCode ?? "", LinguaKeys.Comparer))
         {
             var code = group.Key;
+            var codeFold = LinguaKeys.Fold(code);
             var ns = sharedScope
                 ? await db.TranslationNamespaces
-                    .FirstOrDefaultAsync(n => n.IsShared && n.Code == code, ct)
+                    .FirstOrDefaultAsync(n => n.IsShared && n.Code.ToLower() == codeFold, ct)
                 : await db.TranslationNamespaces
-                    .FirstOrDefaultAsync(n => n.ProjectId == scopeProjectId && n.Code == code, ct);
+                    .FirstOrDefaultAsync(n => n.ProjectId == scopeProjectId && n.Code.ToLower() == codeFold, ct);
 
-            var existing = new Dictionary<string, TranslationEntry>(StringComparer.Ordinal);
+            var existing = new Dictionary<string, TranslationEntry>(LinguaKeys.Comparer);
             if (ns is null)
             {
                 ns = new TranslationNamespace
@@ -586,10 +600,10 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             else
             {
                 var namespaceId = ns.Id;
-                var wantedKeys = group.Select(i => i.Key).Distinct(StringComparer.Ordinal).ToList();
+                var wantedKeys = LinguaKeys.FoldAll(group.Select(i => i.Key));
                 var loaded = await db.TranslationEntries
                     .Include(e => e.Translations)
-                    .Where(e => e.NamespaceId == namespaceId && wantedKeys.Contains(e.Key))
+                    .Where(e => e.NamespaceId == namespaceId && wantedKeys.Contains(e.Key.ToLower()))
                     .ToListAsync(ct);
                 foreach (var e in loaded)
                 {
@@ -754,7 +768,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         if (string.Equals(projectCode, "__shared__", StringComparison.OrdinalIgnoreCase))
         {
             ns = await db.TranslationNamespaces
-                .FirstOrDefaultAsync(n => n.IsShared && n.Code == namespaceCode, ct);
+                .FirstOrDefaultAsync(n => n.IsShared && n.Code.ToLower() == LinguaKeys.Fold(namespaceCode), ct);
         }
         else
         {
@@ -764,7 +778,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
                 return false;
             }
             ns = await db.TranslationNamespaces
-                .FirstOrDefaultAsync(n => n.ProjectId == project.Id && n.Code == namespaceCode, ct);
+                .FirstOrDefaultAsync(n => n.ProjectId == project.Id && n.Code.ToLower() == LinguaKeys.Fold(namespaceCode), ct);
         }
 
         if (ns is null)
@@ -773,7 +787,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         }
 
         var entry = await db.TranslationEntries
-            .FirstOrDefaultAsync(e => e.NamespaceId == ns.Id && e.Key == key, ct);
+            .FirstOrDefaultAsync(e => e.NamespaceId == ns.Id && e.Key.ToLower() == LinguaKeys.Fold(key), ct);
         if (entry is null)
         {
             return false;
@@ -855,27 +869,32 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         int updatedTranslations = 0;
         int flaggedIssues = 0;
         int staleMarked = 0;
-        var affectedNamespaces = new HashSet<string>(StringComparer.Ordinal);
+        var affectedNamespaces = new HashSet<string>(LinguaKeys.Comparer);
+
+        // 导入文件内仅大小写不同的重复词条（"Confirm" 与 "confirm"）：在「命名空间 / Key 忽略大小写」口径下是同一个词条，
+        // 后出现的覆盖先出现的。先把它们数出来，随导入结果提示维护者，而不是悄悄吞掉其中一条。
+        var fileDuplicates = FindCaseOnlyDuplicates(parsedItems);
 
         // 只加载本批涉及的命名空间与词条（按编码 / Key 过滤），建字典索引后逐条 O(1) 命中。
         // 以前把整个项目的词条树（全部命名空间 × 词条 × 译文）带跟踪读进内存，再对每条导入做两次线性扫描
         // —— 导入几千条 key 时查询量与内存随「项目规模 × 导入规模」相乘放大，是大 JSON 导入时
         // 内存尖峰与 CPU 打满的元凶。查询模式与 UpsertTranslationsBatchAsync 一致（已验证的按需加载）。
-        var nsCodes = parsedItems.Select(i => i.Namespace).Distinct(StringComparer.Ordinal).ToList();
+        // 命名空间编码 / Key 忽略大小写：库里是 order.cancel、文件里写 Order.Cancel 会命中同一条词条并更新它，不会另建一条。
+        var nsCodes = LinguaKeys.FoldAll(parsedItems.Select(i => i.Namespace));
         var namespaces = (await db.TranslationNamespaces
-                .Where(n => n.ProjectId == project.Id && nsCodes.Contains(n.Code))
+                .Where(n => n.ProjectId == project.Id && nsCodes.Contains(n.Code.ToLower()))
                 .ToListAsync(ct))
-            .ToDictionary(n => n.Code, StringComparer.Ordinal);
+            .ToDictionary(n => n.Code, LinguaKeys.Comparer);
 
         var nsById = namespaces.Values.ToDictionary(n => n.Id);
-        var entriesByNs = new Dictionary<string, Dictionary<string, TranslationEntry>>(StringComparer.Ordinal);
+        var entriesByNs = new Dictionary<string, Dictionary<string, TranslationEntry>>(LinguaKeys.Comparer);
         if (namespaces.Count > 0)
         {
             var namespaceIds = namespaces.Values.Select(n => n.Id).ToList();
-            var keys = parsedItems.Select(i => i.Key).Distinct(StringComparer.Ordinal).ToList();
+            var keys = LinguaKeys.FoldAll(parsedItems.Select(i => i.Key));
             var loaded = await db.TranslationEntries
                 .Include(e => e.Translations)
-                .Where(e => namespaceIds.Contains(e.NamespaceId) && keys.Contains(e.Key))
+                .Where(e => namespaceIds.Contains(e.NamespaceId) && keys.Contains(e.Key.ToLower()))
                 .ToListAsync(ct);
             foreach (var e in loaded)
             {
@@ -883,7 +902,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
                 var code = nsById[e.NamespaceId].Code;
                 if (!entriesByNs.TryGetValue(code, out var dict))
                 {
-                    dict = entriesByNs[code] = new(StringComparer.Ordinal);
+                    dict = entriesByNs[code] = new(LinguaKeys.Comparer);
                 }
 
                 dict[e.Key] = e;
@@ -892,7 +911,6 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
 
         foreach (var (nsCode, key, val) in parsedItems)
         {
-            affectedNamespaces.Add(nsCode);
             if (!namespaces.TryGetValue(nsCode, out var ns))
             {
                 ns = new TranslationNamespace
@@ -905,9 +923,12 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
                 db.TranslationNamespaces.Add(ns);
             }
 
+            // 以库里（或首次创建时）的写法登记，导入结果里不会因为文件写法不同而把同一命名空间列两次
+            affectedNamespaces.Add(ns.Code);
+
             if (!entriesByNs.TryGetValue(nsCode, out var known))
             {
-                known = entriesByNs[nsCode] = new(StringComparer.Ordinal);
+                known = entriesByNs[nsCode] = new(LinguaKeys.Comparer);
             }
 
             if (!known.TryGetValue(key, out var entry))
@@ -983,6 +1004,10 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
 
         await SaveAsync(db, ct);
 
+        // 导入照常入库，但把「导入当下就产生的键路径冲突」告诉维护者：旧项目的 JSON 常常同时有 "Confirm": "确认"
+        // 与 "Confirm": { ... }（或扁平的 Confirm / Confirm.Title），不提示的话要等到发布被门禁拦下才会发现
+        var (pathConflicts, pathConflictCount) = await DetectImportPathConflictsAsync(
+            db, project.Id, project.SharedNamespaceCodes, parsedItems, ct);
         return new JsonImportResult(
             projectCode,
             culture,
@@ -991,7 +1016,13 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             updatedTranslations,
             affectedNamespaces.ToList(),
             flaggedIssues,
-            staleMarked);
+            staleMarked)
+        {
+            PathConflicts = pathConflicts,
+            PathConflictCount = pathConflictCount,
+            CaseDuplicates = fileDuplicates.Take(PublishChecker.PathConflictReportLimit).ToList(),
+            CaseDuplicateCount = fileDuplicates.Count
+        };
     }
 
     private static readonly DeterministicTranslationValidator Validator = new();
@@ -1040,7 +1071,7 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         var project = await db.Projects
             .AsNoTracking()
             .Where(p => p.Code == report.ProjectCode)
-            .Select(p => new { p.Id, p.DefaultCulture })
+            .Select(p => new { p.Id, p.DefaultCulture, p.SharedNamespaceCodes })
             .FirstOrDefaultAsync(ct);
 
         if (project is null)
@@ -1048,8 +1079,14 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             return 0;
         }
 
+        // 外部 SDK 上报的命名空间 / Key 可能带首尾空白：入库前统一去空白（发布路径口径本就逐段 Trim，
+        // 不处理会得到「库里是 'Confirm '、发布出来是 'Confirm'」的幽灵词条，且与正常词条的唯一性判断对不上）。
+        // 空命名空间 = 项目根；Key 为空的上报没有可发布的路径，直接忽略。
         var items = report.Items
-            .Select(i => (Code: string.IsNullOrWhiteSpace(i.Namespace) ? "" : i.Namespace, Item: i)) // 空 = 项目根
+            .Select(i => (
+                Code: string.IsNullOrWhiteSpace(i.Namespace) ? "" : i.Namespace.Trim(),
+                Item: i with { Key = (i.Key ?? string.Empty).Trim() }))
+            .Where(t => t.Item.Key.Length > 0)
             .ToList();
         if (items.Count == 0)
         {
@@ -1063,22 +1100,23 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         }
 
         var projectId = project.Id;
-        var codes = items.Select(i => i.Code).Distinct(StringComparer.Ordinal).ToList();
-        var keys = items.Select(i => i.Item.Key).Distinct(StringComparer.Ordinal).ToList();
+        // 命名空间 / Key 忽略大小写：客户端写成 Order.Cancel、库里是 order.cancel，算「已存在」，不会另建一条
+        var codes = LinguaKeys.FoldAll(items.Select(i => i.Code));
+        var keys = LinguaKeys.FoldAll(items.Select(i => i.Item.Key));
 
         var namespaces = (await db.TranslationNamespaces
-                .Where(n => n.ProjectId == projectId && codes.Contains(n.Code))
+                .Where(n => n.ProjectId == projectId && codes.Contains(n.Code.ToLower()))
                 .ToListAsync(ct))
-            .ToDictionary(n => n.Code, StringComparer.Ordinal);
+            .ToDictionary(n => n.Code, LinguaKeys.Comparer);
 
         // 已存在的 (命名空间, Key)；本批内重复出现的 Key 也靠它去重
-        var known = new HashSet<(string Code, string Key)>();
+        var known = new HashSet<(string Code, string Key)>(LinguaKeys.EntryComparer);
         if (namespaces.Count > 0)
         {
             var namespaceIds = namespaces.Values.Select(n => n.Id).ToList();
             var existing = await db.TranslationEntries
                 .AsNoTracking()
-                .Where(e => namespaceIds.Contains(e.NamespaceId) && keys.Contains(e.Key))
+                .Where(e => namespaceIds.Contains(e.NamespaceId) && keys.Contains(e.Key.ToLower()))
                 .Select(e => new { e.Namespace!.Code, e.Key })
                 .ToListAsync(ct);
             foreach (var e in existing)
@@ -1087,9 +1125,40 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             }
         }
 
-        int createdCount = 0;
+        // 先挑出本批真正要新建的词条（已存在的、本批内重复的都剔掉）；没有新建项就不必再查冲突
+        var pending = new List<(string Code, MissingKeyReportItem Item)>();
         foreach (var (nsCode, item) in items)
         {
+            if (known.Add((nsCode, item.Key)))
+            {
+                pending.Add((nsCode, item));
+            }
+        }
+
+        if (pending.Count == 0)
+        {
+            return 0;
+        }
+
+        // 键路径冲突预检：自动上报只会按「客户端代码里怎么写的」报上来，并不知道项目里已有同名命名空间 / 同路径词条。
+        // 典型案例：库里已有命名空间 Confirm，客户端 lingua["Confirm"] 取不到值，上报裸 key「Confirm」→
+        // 自动建出根词条 Confirm，与命名空间 Confirm 在发布 JSON 里撞同一个位置。这种词条发布门禁必然拦截、
+        // 嵌套 JSON 必然丢内容，所以不创建；上报它的客户端拿到的仍是 key 本身，维护者在后台能看到命名空间里的真实词条。
+        var related = await LoadPathRelatedEntriesAsync(
+            db, projectId, project.SharedNamespaceCodes,
+            pending.Select(p => (p.Code, p.Item.Key)).ToList(), ct);
+        var pathIndex = new KeyPathIndex(related);
+
+        int createdCount = 0;
+        foreach (var (nsCode, item) in pending)
+        {
+            if (pathIndex.FindConflict(nsCode, item.Key) is not null)
+            {
+                continue;
+            }
+
+            pathIndex.Add(nsCode, item.Key);
+
             if (!namespaces.TryGetValue(nsCode, out var ns))
             {
                 ns = new TranslationNamespace
@@ -1102,11 +1171,6 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
                 db.TranslationNamespaces.Add(ns);
             }
 
-            if (!known.Add((nsCode, item.Key)))
-            {
-                continue;
-            }
-
             var sourceText = string.IsNullOrWhiteSpace(item.DefaultText) ? string.Empty : item.DefaultText!;
             var entry = new TranslationEntry
             {
@@ -1114,10 +1178,13 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
                 Namespace = ns,
                 Key = item.Key,
                 SourceText = sourceText,
-                Context = item.Context ?? "由客户端开发环境自动上报的缺失词条",
+                Context = item.Context ?? MissingKeyContext(report.Culture),
                 IsAutoReported = true
             };
 
+            // 草稿译文只建在项目默认语种上：DefaultText 是业务代码里的「源文案」（缺省就是 key 本身），不是 report.Culture 的译文。
+            // 若按上报语种建一行，就等于把源语言文案当成目标语种译文入库，还会被发布策略当成可上线内容。
+            // 上报语种只作为线索写进 Context（见 MissingKeyContext），翻译仍走正常的「默认语种 → 目标语种」流程。
             entry.Translations.Add(new TranslationValue
             {
                 EntryId = entry.Id,
@@ -1138,6 +1205,238 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
         }
 
         return createdCount;
+    }
+
+    public async Task<IReadOnlyList<string>> FindKeyPathConflictsAsync(
+        string projectCode,
+        string namespaceCode,
+        string key,
+        CancellationToken ct = default)
+    {
+        namespaceCode = string.IsNullOrWhiteSpace(namespaceCode) ? "" : namespaceCode.Trim();
+        key = (key ?? string.Empty).Trim();
+        var segments = JsonBundleConverter.ToPathSegments(namespaceCode, key);
+        if (segments.Length == 0)
+        {
+            return [];
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        Guid? projectId = null;
+        List<string> sharedCodes = [];
+        if (!string.Equals(projectCode, "__shared__", StringComparison.OrdinalIgnoreCase))
+        {
+            var project = await db.Projects
+                .AsNoTracking()
+                .Where(p => p.Code == projectCode)
+                .Select(p => new { p.Id, p.SharedNamespaceCodes })
+                .FirstOrDefaultAsync(ct);
+            if (project is null)
+            {
+                return [];
+            }
+
+            projectId = project.Id;
+            sharedCodes = project.SharedNamespaceCodes;
+        }
+
+        var related = await LoadPathRelatedEntriesAsync(db, projectId, sharedCodes, [(namespaceCode, key)], ct);
+        var conflict = new KeyPathIndex(related).FindConflict(namespaceCode, key);
+        return conflict is null ? [] : [PublishChecker.DescribeConflict(conflict)];
+    }
+
+    /// <summary>首段个数不超过该值时，按首段逐个精确查询；超过时一次性加载涉及命名空间的全部 Key（比几十次往返更快）。</summary>
+    private const int PathSegmentQueryThreshold = 32;
+
+    /// <summary>路径段逐段忽略大小写比较（与 <see cref="LinguaKeys"/> 的口径一致）。</summary>
+    private static bool StartsWithSegments(string[] longer, string[] prefix) =>
+        longer.Length >= prefix.Length
+        && ((ReadOnlySpan<string>)longer.AsSpan(0, prefix.Length)).SequenceEqual(prefix, LinguaKeys.Comparer);
+
+    /// <summary>
+    /// 加载可能与候选词条产生键路径冲突的已有词条 (命名空间编码, Key)：
+    /// 项目自有命名空间 + 项目继承的共享命名空间（<paramref name="projectId"/> 为 null 时只看共享命名空间池）。
+    /// <para>
+    /// 命名空间（量很小）先整体读出，再按「命名空间路径」与「候选完整路径」的关系在内存里分流，只对真正可能冲突的部分读词条表：
+    /// </para>
+    /// <list type="bullet">
+    /// <item>命名空间路径是候选路径的前缀（含根命名空间）：只读该命名空间里「与候选同一个下一段」的 Key
+    /// （<c>lower(key) = 段 OR lower(key) LIKE '段.%' OR lower(key) LIKE '段:%'</c>，全部忽略大小写），不会把整个命名空间读进内存；</item>
+    /// <item>候选路径是命名空间路径的前缀（候选值压在整个命名空间之上，如根 Key <c>Confirm</c> 对命名空间 <c>Confirm</c>）：
+    /// 只要该命名空间有词条就冲突，每个命名空间只取一个代表 Key（聚合查询）；</item>
+    /// <item>两条路径互不为前缀：不可能冲突，不读。</item>
+    /// </list>
+    /// </summary>
+    private static async Task<List<(string Namespace, string Key)>> LoadPathRelatedEntriesAsync(
+        LinguaDbContext db,
+        Guid? projectId,
+        List<string> sharedCodes,
+        IReadOnlyCollection<(string Namespace, string Key)> candidates,
+        CancellationToken ct)
+    {
+        var result = new List<(string Namespace, string Key)>();
+        var candidatePaths = candidates
+            .Select(c => JsonBundleConverter.ToPathSegments(c.Namespace, c.Key))
+            .Where(p => p.Length > 0)
+            .ToList();
+        if (candidatePaths.Count == 0)
+        {
+            return result;
+        }
+
+        var foldedSharedCodes = LinguaKeys.FoldAll(sharedCodes);
+        var namespaceQuery = db.TranslationNamespaces.AsNoTracking();
+        namespaceQuery = projectId is { } scopeId
+            ? namespaceQuery.Where(n => n.ProjectId == scopeId || (n.IsShared && foldedSharedCodes.Contains(n.Code.ToLower())))
+            : namespaceQuery.Where(n => n.ProjectId == null && n.IsShared);
+        var namespaceRows = await namespaceQuery
+            .Select(n => new { n.Id, n.Code })
+            .ToListAsync(ct);
+
+        var codes = new Dictionary<Guid, string>();
+        // 命名空间 → 需要读取的「下一段」集合（命名空间路径是候选路径的前缀）
+        var nextSegments = new Dictionary<Guid, HashSet<string>>();
+        // 候选路径整体压在这些命名空间之上：只需知道它们有没有词条
+        var coveredIds = new HashSet<Guid>();
+
+        foreach (var row in namespaceRows)
+        {
+            var nsPath = JsonBundleConverter.ToPathSegments(row.Code, "");
+            codes[row.Id] = row.Code ?? string.Empty;
+
+            foreach (var path in candidatePaths)
+            {
+                if (StartsWithSegments(nsPath, path))
+                {
+                    // 候选路径 ≤ 命名空间路径：候选若是一个值，就压在命名空间下所有词条之上
+                    coveredIds.Add(row.Id);
+                }
+                else if (StartsWithSegments(path, nsPath))
+                {
+                    // 命名空间路径是候选路径的真前缀（根命名空间的 nsPath 为空）：只可能与「下一段相同」的 Key 冲突
+                    if (!nextSegments.TryGetValue(row.Id, out var set))
+                    {
+                        nextSegments[row.Id] = set = new HashSet<string>(LinguaKeys.Comparer);
+                    }
+
+                    set.Add(path[nsPath.Length]);
+                }
+            }
+        }
+
+        if (coveredIds.Count > 0)
+        {
+            var ids = coveredIds.ToList();
+            var representatives = await db.TranslationEntries
+                .AsNoTracking()
+                .Where(e => ids.Contains(e.NamespaceId))
+                .GroupBy(e => e.NamespaceId)
+                .Select(g => new { NamespaceId = g.Key, Key = g.Min(e => e.Key)! })
+                .ToListAsync(ct);
+            result.AddRange(representatives.Select(r => (codes[r.NamespaceId], r.Key)));
+        }
+
+        if (nextSegments.Count == 0)
+        {
+            return result;
+        }
+
+        var distinctSegments = nextSegments.Values.SelectMany(s => s).Distinct(LinguaKeys.Comparer).ToList();
+        if (distinctSegments.Count > PathSegmentQueryThreshold)
+        {
+            var ids = nextSegments.Keys.ToList();
+            var rows = await db.TranslationEntries
+                .AsNoTracking()
+                .Where(e => ids.Contains(e.NamespaceId))
+                .Select(e => new { e.NamespaceId, e.Key })
+                .ToListAsync(ct);
+            result.AddRange(rows.Select(r => (codes[r.NamespaceId], r.Key)));
+            return result;
+        }
+
+        foreach (var segment in distinctSegments)
+        {
+            var ids = nextSegments.Where(kv => kv.Value.Contains(segment)).Select(kv => kv.Key).ToList();
+            // 忽略大小写：Key 与段都折成小写再比，才能命中 lower(key) 表达式索引
+            var segmentFold = LinguaKeys.Fold(segment);
+            var dotPrefix = segmentFold + ".";
+            var colonPrefix = segmentFold + ":";
+            var rows = await db.TranslationEntries
+                .AsNoTracking()
+                .Where(e => ids.Contains(e.NamespaceId)
+                            && (e.Key.ToLower() == segmentFold
+                                || e.Key.ToLower().StartsWith(dotPrefix)
+                                || e.Key.ToLower().StartsWith(colonPrefix)))
+                .Select(e => new { e.NamespaceId, e.Key })
+                .ToListAsync(ct);
+            result.AddRange(rows.Select(r => (codes[r.NamespaceId], r.Key)));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 本次导入涉及的键路径冲突：导入落库后，在与导入词条首段相关的已有词条里找冲突，只保留牵涉到本次导入词条的那些
+    /// （存量里与本次导入无关的历史冲突不在导入结果里重复提示，发布门禁自会处理）。
+    /// </summary>
+    private static async Task<(IReadOnlyList<string> Descriptions, int Total)> DetectImportPathConflictsAsync(
+        LinguaDbContext db,
+        Guid projectId,
+        List<string> sharedCodes,
+        IReadOnlyList<(string Namespace, string Key, string Value)> imported,
+        CancellationToken ct)
+    {
+        var candidates = imported.Select(i => (i.Namespace, i.Key)).ToHashSet(LinguaKeys.EntryComparer);
+        var related = await LoadPathRelatedEntriesAsync(db, projectId, sharedCodes, candidates, ct);
+        var conflicts = JsonBundleConverter.DetectPathConflicts(related)
+            .Where(c => c.ValueClaims.Concat(c.BranchClaims).Any(candidates.Contains))
+            .ToList();
+
+        return (
+            conflicts.Take(PublishChecker.PathConflictReportLimit).Select(PublishChecker.DescribeConflict).ToList(),
+            conflicts.Count);
+    }
+
+    /// <summary>
+    /// 导入文件内「仅大小写不同」的重复词条：(命名空间, Key) 忽略大小写后相同、但写法不同的几项在导入时会合并成同一个词条
+    /// （后出现的覆盖先出现的），用一句话列出来，让维护者知道文件里有不一致的写法。完全相同的重复项不在此列。
+    /// </summary>
+    private static List<string> FindCaseOnlyDuplicates(IReadOnlyList<(string Namespace, string Key, string Value)> parsed)
+    {
+        var groups = new Dictionary<(string Namespace, string Key), List<string>>(LinguaKeys.EntryComparer);
+        foreach (var (ns, key, _) in parsed)
+        {
+            if (!groups.TryGetValue((ns, key), out var spellings))
+            {
+                groups[(ns, key)] = spellings = [];
+            }
+
+            var spelling = string.IsNullOrEmpty(ns) ? key : $"{ns}.{key}";
+            if (!spellings.Contains(spelling, StringComparer.Ordinal))
+            {
+                spellings.Add(spelling);
+            }
+        }
+
+        return groups.Values
+            .Where(spellings => spellings.Count > 1)
+            .Select(spellings => $"{string.Join(" / ", spellings.Select(s => $"\"{s}\""))} 仅大小写不同，按同一个词条导入")
+            .ToList();
+    }
+
+    /// <summary>
+    /// 缺词词条缺省的上下文说明：带上「是哪个语种的请求触发的上报」，让维护者看得出缺词发生在哪个语种。
+    /// 语种来自外部请求，只接受形如 <c>en-US</c> 的安全片段（字母 / 数字 / 连字符 / 下划线，长度 ≤ 35），其余一律不写，避免把任意文本落进库。
+    /// </summary>
+    private static string MissingKeyContext(string? culture)
+    {
+        const string baseText = "由客户端开发环境自动上报的缺失词条";
+        var tag = culture?.Trim();
+        return !string.IsNullOrEmpty(tag)
+               && tag.Length <= 35
+               && tag.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '-' or '_')
+            ? $"{baseText}（请求语种：{tag}）"
+            : baseText;
     }
 
     public async Task<GlossaryTerm> SaveGlossaryTermAsync(GlossaryTerm term, CancellationToken ct = default)
@@ -1302,8 +1601,9 @@ public sealed class EfCoreLinguaRepository(IDbContextFactory<LinguaDbContext> db
             .FirstOrDefaultAsync(p => p.Code == projectCode, ct)
             ?? throw new InvalidOperationException($"Project '{projectCode}' not found.");
 
+        var sharedCodes = LinguaKeys.FoldAll(project.SharedNamespaceCodes);
         var sharedNamespaces = await db.TranslationNamespaces
-            .Where(n => n.IsShared && project.SharedNamespaceCodes.Contains(n.Code))
+            .Where(n => n.IsShared && sharedCodes.Contains(n.Code.ToLower()))
             .Include(n => n.Entries)
                 .ThenInclude(e => e.Translations)
             .AsSplitQuery()

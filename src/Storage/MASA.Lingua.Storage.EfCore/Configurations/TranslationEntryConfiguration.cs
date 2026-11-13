@@ -5,7 +5,12 @@ using Microsoft.EntityFrameworkCore.Metadata.Builders;
 namespace MASA.Lingua.Storage.EfCore.Configurations;
 
 /// <summary>
-/// translation_entries：命名空间内 key 唯一。
+/// translation_entries：命名空间内 key 唯一（<b>忽略大小写</b>：<c>Confirm</c> 与 <c>confirm</c> 是同一个词条）。
+/// <para>
+/// 物理索引是 <c>(namespace_id, lower(key))</c> 表达式唯一索引，由迁移 <c>CaseInsensitiveKeyUniqueness</c> 用原生 SQL 建立：
+/// EF Core 的 Fluent API 无法声明表达式索引，所以下面的 <c>HasIndex</c> 与它同名、同列、同样唯一，只用来让模型与迁移快照保持一致；
+/// 应用侧的查找统一用 <c>LinguaKeys.Fold</c> + <c>ToLower()</c> 落到这条索引上。
+/// </para>
 /// 词条不再冗余存命名空间编码（唯一事实源是 namespace_id → translation_namespaces.code）。
 /// </summary>
 internal sealed class TranslationEntryConfiguration : IEntityTypeConfiguration<TranslationEntry>
